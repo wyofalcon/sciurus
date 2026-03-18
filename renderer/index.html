@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>QuickClip</title>
+<link rel="stylesheet" href="index.css">
+</head><body>
+
+<!-- Header -->
+<div class="header">
+  <div>
+    <h1>⚡ QuickClip</h1>
+    <div class="sub" id="subtitle">Screenshot → Comment → Done. AI handles the rest.</div>
+  </div>
+  <button class="cap-btn" onclick="openCapture()">⚡ Capture</button>
+</div>
+<div id="aiBar" class="ai-bar" style="display:none">
+  <span class="spinner">✨</span><span id="aiBarMsg">AI categorizing...</span>
+</div>
+<div id="noKeyBanner" class="no-key-banner" style="display:none">
+  ⚠️ No API key found. Add your key to .env file: ANTHROPIC_API_KEY=sk-ant-...
+</div>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sec">Categories</div>
+    <div id="catList"></div>
+    <div class="sec">Status</div>
+    <button class="sb-btn active" onclick="setStatus('all')" data-status="all">All</button>
+    <button class="sb-btn" onclick="setStatus('parked')" data-status="parked">◦ Parked</button>
+    <button class="sb-btn" onclick="setStatus('active')" data-status="active">● Active</button>
+  </div>
+  <!-- Main Content -->
+  <div class="main" id="mainArea">
+    <div class="search-bar">
+      <input id="searchInput" placeholder='Search or ask "that paste thing for Marcus"'
+        onkeydown="if(event.key==='Enter')doAiSearch()" />
+      <button class="ai-btn" id="aiSearchBtn" onclick="doAiSearch()">✨ AI Search</button>
+    </div>
+    <div id="aiResultBar" class="ai-result-bar" style="display:none">
+      <span id="aiResultText"></span>
+      <button class="clear-btn" onclick="clearSearch()">Clear</button>
+    </div>
+    <div id="clipList"></div>
+  </div>
+</div>
+
+<script src="index.js"></script>
+</body></html>

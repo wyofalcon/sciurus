@@ -1,0 +1,31 @@
+{
+  "name": "quickclip",
+  "version": "1.0.0",
+  "description": "Screenshot + Comment thought capture with AI categorization",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "set QUICKCLIP_DEV=1 && electron .",
+    "build": "electron-builder --win",
+    "pack": "electron-builder --dir"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.quickclip.app",
+    "productName": "QuickClip",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    }
+  }
+}

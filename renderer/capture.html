@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>QuickClip Capture</title>
+<link rel="stylesheet" href="capture.css">
+</head><body>
+
+<div class="hdr drag">
+  <h2>⚡ Quick Capture</h2>
+  <button class="xbtn nd" onclick="closeWin()">✕</button>
+</div>
+
+<div class="img-wrap nd" id="imgWrap">
+  <div class="empty-img" id="emptyImg">
+    <div class="ico">📸</div>
+    <div>Waiting for screenshot...</div>
+    <div style="font-size:11px;color:#444;margin-top:4px">It will appear here automatically</div>
+  </div>
+  <img id="ssImg" style="display:none" />
+</div>
+
+<div style="margin:0 16px 10px" class="nd">
+  <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:4px">
+    What is this?
+  </label>
+  <input id="commentInput" type="text"
+    placeholder='e.g. "Advanced Paste in PowerToys - show Marcus"'
+    style="width:100%;background:#12121e;border:1px solid #333;border-radius:8px;
+    color:#e2e2f0;font-size:14px;padding:9px 11px;outline:none;font-family:inherit"
+    onkeydown="if(event.key==='Enter')save();if(event.key==='Escape')closeWin()"
+  />
+</div>
+<div style="margin:0 16px 10px" class="nd">
+  <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:4px">
+    Category <span style="color:#555;text-transform:none">— optional, AI picks if you skip</span>
+  </label>
+  <div id="catWrap" style="display:flex;gap:5px;flex-wrap:wrap"></div>
+</div>
+
+<div id="aiStatus" style="margin:0 16px 8px;padding:5px 10px;border-radius:6px;
+  font-size:11px;color:#a78bfa;background:#a78bfa15;display:none;align-items:center;gap:6px">
+  <span style="display:inline-block;animation:spin 1s linear infinite">✨</span>
+  <span id="aiMsg">AI categorizing...</span>
+</div>
+
+<button id="saveBtn" onclick="save()" disabled
+  style="display:block;width:calc(100% - 32px);margin:14px 16px 10px;
+  background:linear-gradient(135deg,#3b82f6,#8b5cf6);
+  border:none;border-radius:10px;color:#fff;font-size:15px;
+  font-weight:600;padding:11px 0;cursor:pointer;opacity:0.35;
+  -webkit-app-region:no-drag">
+  ⚡ Park It
+</button>
+<div style="text-align:center;font-size:10px;color:#444;padding-bottom:14px">
+  Enter to save · Esc to close
+</div>
+
+<script src="capture.js"></script>
+</body></html>
