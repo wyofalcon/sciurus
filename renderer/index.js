@@ -31,10 +31,6 @@ document.addEventListener('keydown', (e) => {
 window.quickclip.onClipsUpdated((updated) => {
   clips = updated;
   renderAll();
-  const newest = clips[0];
-  if (newest && newest.category === 'Uncategorized' && newest.comment) {
-    aiCategorize(newest);
-  }
 });
 
 // ── Escaping ──

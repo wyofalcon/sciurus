@@ -177,17 +177,63 @@ async function syncCategories() {
   console.log(`[Sciurus] Categories synced: ${merged.length} total`);
 }
 
+// ── Auto-Categorize ──
+
+/** Run AI categorization in the background after a clip is saved. */
+async function autoCategorize(clipId, comment, imageData) {
+  try {
+    const cats = store.get('categories', DEFAULT_CATEGORIES);
+    const result = await ai.categorize(comment, cats, imageData);
+    if (!result) return;
+
+    const updates = {};
+    if (result.category) updates.category = result.category;
+    if (result.tags) updates.tags = result.tags;
+    if (result.summary) updates.aiSummary = result.summary;
+    if (result.url) updates.url = result.url;
+
+    if (Object.keys(updates).length) {
+      const clips = store.get('clips', []);
+      const idx = clips.findIndex((c) => c.id === clipId);
+      if (idx !== -1) {
+        clips[idx] = { ...clips[idx], ...updates };
+        store.set('clips', clips);
+        notifyMainWindow('clips-updated', clips);
+
+        // Add new category to local + Sheets
+        if (result.category && !cats.includes(result.category)) {
+          const merged = [...cats, result.category];
+          store.set('categories', merged);
+        }
+
+        // Sync to Sheets
+        sheets.saveClip(clips[idx]).catch((e) =>
+          console.error('[Sheets] Background sync error:', e.message)
+        );
+      }
+    }
+    console.log(`[Sciurus] AI categorized: "${comment.slice(0, 30)}" → ${result.category}`);
+  } catch (e) {
+    console.error('[Sciurus] Auto-categorize failed:', e.message);
+  }
+}
+
 // ── IPC Handlers ──
 
 ipcMain.handle('get-clips', () => store.get('clips', []));
 ipcMain.handle('get-categories', () => store.get('categories', DEFAULT_CATEGORIES));
 
-ipcMain.handle('save-clip', (_, clip) => {
+ipcMain.handle('save-clip', async (_, clip) => {
   if (!clip || typeof clip.id !== 'string') return false;
   const clips = store.get('clips', []);
   clips.unshift(clip);
   store.set('clips', clips);
   notifyMainWindow('clips-updated', clips);
+
+  // Auto-categorize in the background (main process, always runs)
+  if (clip.category === 'Uncategorized' && clip.comment && ai.isEnabled()) {
+    autoCategorize(clip.id, clip.comment, clip.image);
+  }
   return true;
 });
 
