@@ -22,6 +22,8 @@ window.quickclip.onScreenshot((dataURL) => {
 (async () => {
   categories = await window.quickclip.getCategories();
   renderCategories();
+  // Focus the comment input immediately so user can start typing
+  document.getElementById('commentInput').focus();
 })();
 
 // ── Category Picker ──
@@ -58,19 +60,31 @@ document.getElementById('commentInput').addEventListener('input', updateSaveBtn)
 async function save() {
   const comment = document.getElementById('commentInput').value.trim();
   if (!comment && !screenshotData) return;
-  const clip = {
-    id: Date.now().toString(),
-    image: screenshotData,
-    comment,
-    category: selectedCat || 'Uncategorized',
-    tags: [],
-    aiSummary: null,
-    status: 'parked',
-    timestamp: Date.now(),
-    comments: [],
-  };
-  await window.quickclip.saveClip(clip);
-  window.quickclip.closeCapture();
+
+  // Disable button to prevent double-click
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    const clip = {
+      id: Date.now().toString(),
+      image: screenshotData,
+      comment,
+      category: selectedCat || 'Uncategorized',
+      tags: [],
+      aiSummary: null,
+      status: 'parked',
+      timestamp: Date.now(),
+      comments: [],
+    };
+    await window.quickclip.saveClip(clip);
+    window.quickclip.closeCapture();
+  } catch (e) {
+    console.error('[Capture] Save failed:', e);
+    btn.textContent = 'Error — try again';
+    btn.disabled = false;
+  }
 }
 
 function closeWin() {

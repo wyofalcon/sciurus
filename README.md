@@ -64,12 +64,12 @@ Drive quota and cannot create new files. Create the sheet manually:
 npm start
 ```
 
-## Logi MX Master 4 Shortcut
+## Tip: One-Button Capture
 
-1. Open **Logi Options+** > select MX Master 4
-2. Go to **Buttons** > pick a button (thumb/gesture)
-3. Set action to **Keystroke** > enter `Ctrl+Shift+Q`
-4. Now that button triggers Sciurus!
+Sciurus works best when capturing is effortless — one press, no thinking.
+Map `Ctrl+Shift+Q` to a spare mouse button or macro key so you can stash
+a thought without breaking flow. Mice with programmable buttons (like
+Logitech's MX Master series) are great for this.
 
 ## Project Structure
 
