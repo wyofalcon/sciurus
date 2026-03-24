@@ -1,26 +1,51 @@
-// src/ai.js — AI categorization via Gemini API (vision-capable)
+// src/ai.js — AI categorization via Vertex AI Gemini (billed to GCP project)
 const fs = require('fs');
 const path = require('path');
+const { google } = require('googleapis');
 
-function getApiKey() {
-  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
+const MODEL = 'gemini-2.5-flash';
+const LOCATION = 'us-central1';
+
+let authClient = null;
+let projectId = null;
+
+function init() {
+  const credPath = path.join(__dirname, '..', 'credentials.json');
+  if (!fs.existsSync(credPath)) {
+    console.log('[AI] No credentials.json — AI disabled.');
+    return false;
+  }
   try {
-    const envPath = path.join(__dirname, '..', '.env');
-    const content = fs.readFileSync(envPath, 'utf8');
-    const match = content.match(/GEMINI_API_KEY=(.+)/);
-    if (match) return match[1].trim();
-  } catch (e) {}
-  return null;
+    const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
+    projectId = creds.project_id;
+    authClient = new google.auth.GoogleAuth({
+      keyFile: credPath,
+      scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+    });
+    console.log(`[AI] Vertex AI ready (project: ${projectId}, model: ${MODEL})`);
+    return true;
+  } catch (e) {
+    console.error('[AI] Init failed:', e.message);
+    return false;
+  }
+}
+
+function isEnabled() {
+  return !!authClient && !!projectId;
 }
 
 async function callGemini(parts) {
-  const key = getApiKey();
-  if (!key) return null;
+  if (!isEnabled()) return null;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
+  const token = await authClient.getAccessToken();
+  const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
+
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
     body: JSON.stringify({
       contents: [{ parts }],
       generationConfig: { temperature: 0.3, maxOutputTokens: 500 },
@@ -28,6 +53,9 @@ async function callGemini(parts) {
   });
 
   const data = await res.json();
+  if (data.error) {
+    throw new Error(data.error.message || JSON.stringify(data.error));
+  }
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   const clean = text.replace(/```json|```/g, '').trim();
   return JSON.parse(clean);
@@ -77,4 +105,4 @@ async function search(query, clips) {
   }
 }
 
-module.exports = { categorize, search, getApiKey };
+module.exports = { init, isEnabled, categorize, search };

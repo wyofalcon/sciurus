@@ -30,19 +30,17 @@ Local-first with Google Sheets cloud sync.
 npm install
 ```
 
-### 2. Gemini API Key
-- Go to https://aistudio.google.com/apikey
-- Create a key
-- Add to `.env`: `GEMINI_API_KEY=your_key_here`
-
-### 3. Google Sheets Sync (optional)
-
-#### Service Account Setup
+### 2. Google Cloud Setup
 - Go to https://console.cloud.google.com/
 - Create a project (or use existing)
-- Enable the **Google Sheets API**
+- Enable the **Vertex AI API** and **Google Sheets API**
 - Go to Credentials > Create Credentials > **Service Account**
 - Download the JSON key and save as `credentials.json` in this folder
+
+This single service account powers both Gemini AI (via Vertex AI)
+and Google Sheets sync — all billed to your GCP credits.
+
+### 3. Google Sheets Sync (optional)
 
 #### Create & Configure the Sheet
 Due to Google Cloud restrictions, service accounts start with 0 bytes of

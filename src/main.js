@@ -173,7 +173,7 @@ ipcMain.handle('ai-search', async (_, query) => {
   const clips = store.get('clips', []);
   return ai.search(query, clips);
 });
-ipcMain.handle('has-api-key', () => !!ai.getApiKey());
+ipcMain.handle('has-api-key', () => ai.isEnabled());
 
 ipcMain.on('close-capture', () => {
   if (captureWindow && !captureWindow.isDestroyed()) captureWindow.close();
@@ -188,6 +188,7 @@ app.whenReady().then(async () => {
   createMainWindow();
   createTray();
   startClipboardWatcher();
+  ai.init();
   sheets.init();
   await syncCategories();
   globalShortcut.register('CommandOrControl+Shift+Q', () => {
