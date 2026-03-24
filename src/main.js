@@ -1,14 +1,13 @@
-// src/main.js — Electron main process: tray, hotkey, IPC, clipboard watcher
+// src/main.js — Electron main process: tray, hotkey, IPC, clipboard watcher, PostgreSQL
 
 // Clear before requiring electron — inherited from VS Code / Claude Code shell
 delete process.env.ELECTRON_RUN_AS_NODE;
 
-const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const Store = require('electron-store');
+const db = require('./db');
 const ai = require('./ai');
-const sheets = require('./sheets');
 
 // ── .env loader (manual — dotenv v17 changed its API) ──
 
@@ -30,7 +29,7 @@ const DEFAULT_CATEGORIES = [
   'Hardware/GPU', 'Ideas', 'Code Patterns',
 ];
 const ALLOWED_CLIP_FIELDS = [
-  'category', 'tags', 'aiSummary', 'url', 'status', 'comments',
+  'category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment',
 ];
 
 // Tiny 32x32 fallback icon (transparent PNG) for the system tray
@@ -39,7 +38,6 @@ const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAA
 
 // ── State ──
 
-const store = new Store({ name: 'sciurus-data' });
 let tray = null;
 let mainWindow = null;
 let captureWindow = null;
@@ -85,7 +83,7 @@ function sanitizeUpdates(updates) {
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 960, height: 700, show: false,
+    width: 1100, height: 750, show: false,
     title: 'Sciurus',
     backgroundColor: '#13131f',
     webPreferences: {
@@ -111,7 +109,7 @@ function createCaptureWindow(imageDataURL) {
   }
   const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
   captureWindow = new BrowserWindow({
-    width: 460, height: 520,
+    width: 460, height: 580,
     x: screenW - 480, y: 20,
     frame: false, alwaysOnTop: true,
     resizable: true, skipTaskbar: true,
@@ -164,17 +162,26 @@ function createTray() {
   tray.on('click', () => { mainWindow.show(); mainWindow.focus(); });
 }
 
-// ── Category Sync ──
+// ── Migration from electron-store ──
 
-/** Merge categories from Google Sheets into local store. */
-async function syncCategories() {
-  if (!sheets.isEnabled()) return;
-  const sheetCats = await sheets.getCategories();
-  if (!sheetCats || !sheetCats.length) return;
-  const local = store.get('categories', DEFAULT_CATEGORIES);
-  const merged = [...new Set([...local, ...sheetCats])];
-  store.set('categories', merged);
-  console.log(`[Sciurus] Categories synced: ${merged.length} total`);
+async function migrateIfNeeded() {
+  try {
+    const Store = require('electron-store');
+    const oldStore = new Store({ name: 'sciurus-data' });
+    const oldClips = oldStore.get('clips', []);
+    if (oldClips.length === 0) return;
+
+    // Check if DB already has clips (already migrated)
+    const existing = await db.getClips();
+    if (existing.length > 0) return;
+
+    console.log(`[Sciurus] Migrating ${oldClips.length} clips from electron-store...`);
+    const oldCategories = oldStore.get('categories', DEFAULT_CATEGORIES);
+    const ok = await db.migrateFromStore({ clips: oldClips, categories: oldCategories });
+    if (ok) console.log('[Sciurus] Migration complete.');
+  } catch (e) {
+    console.log('[Sciurus] No electron-store data to migrate (or already migrated).');
+  }
 }
 
 // ── Auto-Categorize ──
@@ -182,7 +189,7 @@ async function syncCategories() {
 /** Retry AI categorization for any uncategorized clips from previous sessions. */
 async function retryUncategorized() {
   if (!ai.isEnabled()) return;
-  const clips = store.get('clips', []);
+  const clips = await db.getClips();
   const pending = clips.filter((c) => c.category === 'Uncategorized' && c.comment);
   if (!pending.length) return;
   console.log(`[Sciurus] Retrying AI for ${pending.length} uncategorized clip(s)...`);
@@ -194,7 +201,7 @@ async function retryUncategorized() {
 /** Run AI categorization in the background after a clip is saved. */
 async function autoCategorize(clipId, comment, imageData) {
   try {
-    const cats = store.get('categories', DEFAULT_CATEGORIES);
+    const cats = await db.getCategories();
     const result = await ai.categorize(comment, cats, imageData);
     if (!result) return;
 
@@ -205,24 +212,14 @@ async function autoCategorize(clipId, comment, imageData) {
     if (result.url) updates.url = result.url;
 
     if (Object.keys(updates).length) {
-      const clips = store.get('clips', []);
-      const idx = clips.findIndex((c) => c.id === clipId);
-      if (idx !== -1) {
-        clips[idx] = { ...clips[idx], ...updates };
-        store.set('clips', clips);
-        notifyMainWindow('clips-updated', clips);
+      await db.updateClip(clipId, updates);
 
-        // Add new category to local + Sheets
-        if (result.category && !cats.includes(result.category)) {
-          const merged = [...cats, result.category];
-          store.set('categories', merged);
-        }
-
-        // Sync to Sheets
-        sheets.saveClip(clips[idx]).catch((e) =>
-          console.error('[Sheets] Background sync error:', e.message)
-        );
+      // Add new category if needed
+      if (result.category) {
+        await db.saveCategory(result.category);
       }
+
+      notifyMainWindow('clips-changed');
     }
     console.log(`[Sciurus] AI categorized: "${comment.slice(0, 30)}" → ${result.category}`);
   } catch (e) {
@@ -230,73 +227,104 @@ async function autoCategorize(clipId, comment, imageData) {
   }
 }
 
-// ── IPC Handlers ──
+// ── IPC Handlers: Clips ──
 
-ipcMain.handle('get-clips', () => store.get('clips', []));
-ipcMain.handle('get-categories', () => store.get('categories', DEFAULT_CATEGORIES));
+ipcMain.handle('get-clips', () => db.getClips());
+ipcMain.handle('get-general-clips', () => db.getClips(null));
+ipcMain.handle('get-clips-for-project', (_, projectId) => db.getClips(projectId));
 
 ipcMain.handle('save-clip', async (_, clip) => {
   if (!clip || typeof clip.id !== 'string') return false;
-  const clips = store.get('clips', []);
-  clips.unshift(clip);
-  store.set('clips', clips);
-  notifyMainWindow('clips-updated', clips);
+  await db.saveClip(clip);
+  notifyMainWindow('clips-changed');
 
-  // Auto-categorize in the background (main process, always runs)
+  // Auto-categorize in the background
   if (clip.category === 'Uncategorized' && clip.comment && ai.isEnabled()) {
     console.log(`[Sciurus] Starting AI categorization for: "${clip.comment.slice(0, 30)}"`);
     autoCategorize(clip.id, clip.comment, clip.image);
-  } else {
-    console.log(`[Sciurus] Skipping AI: cat=${clip.category} comment=${!!clip.comment} ai=${ai.isEnabled()}`);
   }
   return true;
 });
 
-ipcMain.handle('update-clip', (_, id, updates) => {
+ipcMain.handle('update-clip', async (_, id, updates) => {
   if (typeof id !== 'string' || !updates) return false;
   const safe = sanitizeUpdates(updates);
-  const clips = store.get('clips', []);
-  const idx = clips.findIndex((c) => c.id === id);
-  if (idx !== -1) {
-    clips[idx] = { ...clips[idx], ...safe };
-    store.set('clips', clips);
-
-    // Background sync to Sheets after AI categorization
-    if (safe.category || safe.tags || safe.aiSummary) {
-      sheets.saveClip(clips[idx]).catch((e) =>
-        console.error('[Sheets] Background sync error:', e.message)
-      );
-    }
-  }
-  notifyMainWindow('clips-updated', clips);
+  await db.updateClip(id, safe);
+  notifyMainWindow('clips-changed');
   return true;
 });
 
-ipcMain.handle('delete-clip', (_, id) => {
+ipcMain.handle('delete-clip', async (_, id) => {
   if (typeof id !== 'string') return false;
-  const clips = store.get('clips', []).filter((c) => c.id !== id);
-  store.set('clips', clips);
-  notifyMainWindow('clips-updated', clips);
+  await db.deleteClip(id);
+  notifyMainWindow('clips-changed');
   return true;
 });
 
-ipcMain.handle('save-categories', (_, cats) => {
-  if (!Array.isArray(cats)) return false;
-  store.set('categories', cats);
+ipcMain.handle('assign-clip-to-project', async (_, clipId, projectId) => {
+  await db.updateClip(clipId, { project_id: projectId });
+  notifyMainWindow('clips-changed');
   return true;
 });
+
+// ── IPC Handlers: Categories ──
+
+ipcMain.handle('get-categories', () => db.getCategories());
+
+ipcMain.handle('save-categories', async (_, cats) => {
+  if (!Array.isArray(cats)) return false;
+  for (const name of cats) await db.saveCategory(name);
+  return true;
+});
+
+// ── IPC Handlers: Projects ──
+
+ipcMain.handle('get-projects', () => db.getProjects());
+ipcMain.handle('get-project', (_, id) => db.getProject(id));
+
+ipcMain.handle('create-project', async (_, data) => {
+  const project = await db.createProject(data);
+  notifyMainWindow('projects-changed');
+  return project;
+});
+
+ipcMain.handle('update-project', async (_, id, data) => {
+  const project = await db.updateProject(id, data);
+  notifyMainWindow('projects-changed');
+  return project;
+});
+
+ipcMain.handle('delete-project', async (_, id) => {
+  await db.deleteProject(id);
+  notifyMainWindow('projects-changed');
+  notifyMainWindow('clips-changed');
+  return true;
+});
+
+// ── IPC Handlers: Settings ──
+
+ipcMain.handle('get-settings', () => db.getAllSettings());
+ipcMain.handle('get-setting', (_, key) => db.getSettings(key));
+ipcMain.handle('save-setting', async (_, key, value) => {
+  await db.saveSetting(key, value);
+  return true;
+});
+
+// ── IPC Handlers: AI ──
 
 ipcMain.handle('ai-categorize', async (_, comment, imageData) => {
-  const cats = store.get('categories', DEFAULT_CATEGORIES);
+  const cats = await db.getCategories();
   return ai.categorize(comment, cats, imageData);
 });
 
 ipcMain.handle('ai-search', async (_, query) => {
-  const clips = store.get('clips', []);
+  const clips = await db.getClips();
   return ai.search(query, clips);
 });
 
 ipcMain.handle('has-api-key', () => ai.isEnabled());
+
+// ── IPC Handlers: Window Controls ──
 
 ipcMain.on('close-capture', () => {
   if (captureWindow && !captureWindow.isDestroyed()) captureWindow.close();
@@ -321,12 +349,32 @@ if (app.isPackaged) {
 app.whenReady().then(async () => {
   createMainWindow();
   createTray();
+
+  // Initialize database (waits for Docker PostgreSQL)
+  const dbReady = await db.init();
+  if (!dbReady) {
+    dialog.showErrorBox(
+      'Sciurus — Database Error',
+      'Could not connect to PostgreSQL.\n\nMake sure Docker is running:\n  docker-compose up -d\n\nThen restart Sciurus.'
+    );
+    isQuitting = true;
+    app.quit();
+    return;
+  }
+
+  // One-time migration from electron-store
+  await migrateIfNeeded();
+
+  // Show the main window on launch
+  mainWindow.show();
+  mainWindow.focus();
+
   startClipboardWatcher();
   ai.init();
-  sheets.init();
-  await syncCategories();
   retryUncategorized();
-  globalShortcut.register('CommandOrControl+Shift+Q', () => {
+
+  const hotkey = process.env.HOTKEY_COMBO || 'CommandOrControl+Shift+Q';
+  globalShortcut.register(hotkey, () => {
     createCaptureWindow(getClipboardImageURL());
   });
 });
@@ -334,7 +382,8 @@ app.whenReady().then(async () => {
 app.on('before-quit', () => { isQuitting = true; });
 app.on('window-all-closed', (e) => e.preventDefault());
 
-app.on('will-quit', () => {
+app.on('will-quit', async () => {
   globalShortcut.unregisterAll();
   if (clipboardWatcher) clearInterval(clipboardWatcher);
+  await db.close();
 });

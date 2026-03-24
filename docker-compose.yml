@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sciurus-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: sciurus
+      POSTGRES_USER: sciurus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sciurus_dev}
+    volumes:
+      - sciurus_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 4G
+        reservations:
+          cpus: "2.0"
+          memory: 2G
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sciurus"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  sciurus_data:
+    driver: local

@@ -8,9 +8,13 @@
 
 <!-- Header -->
 <div class="header">
-  <div>
+  <div class="header-left">
     <h1>Sciurus!</h1>
-    <div class="sub" id="subtitle">Screenshot &rarr; Comment &rarr; Done. AI handles the rest.</div>
+    <div class="tab-bar">
+      <button type="button" class="tab active" data-tab="general" onclick="switchTab('general')">General Notes</button>
+      <button type="button" class="tab" data-tab="projects" onclick="switchTab('projects')">Projects</button>
+      <button type="button" class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</button>
+    </div>
   </div>
   <button type="button" class="cap-btn" onclick="openCapture()">Capture</button>
 </div>
@@ -20,30 +24,16 @@
 <div id="noKeyBanner" class="no-key-banner hidden">
   No credentials found. Add credentials.json (GCP service account) to the project folder.
 </div>
+<div id="statusBar" class="status-bar">
+  <span id="subtitle">Loading...</span>
+</div>
 
+<!-- Main Layout -->
 <div class="layout">
   <!-- Sidebar -->
-  <div class="sidebar">
-    <div class="sec">Categories</div>
-    <div id="catList"></div>
-    <div class="sec">Status</div>
-    <button type="button" class="sb-btn active" onclick="setStatus('all')" data-status="all">All</button>
-    <button type="button" class="sb-btn" onclick="setStatus('parked')" data-status="parked">Parked</button>
-    <button type="button" class="sb-btn" onclick="setStatus('active')" data-status="active">Active</button>
-  </div>
+  <div class="sidebar" id="sidebar"></div>
   <!-- Main Content -->
-  <div class="main" id="mainArea">
-    <div class="search-bar">
-      <input id="searchInput" placeholder='Search or ask "that paste thing for Marcus"'
-        onkeydown="if(event.key==='Enter')doAiSearch()" />
-      <button type="button" class="ai-btn" id="aiSearchBtn" onclick="doAiSearch()">AI Search</button>
-    </div>
-    <div id="aiResultBar" class="ai-result-bar hidden">
-      <span id="aiResultText"></span>
-      <button type="button" class="clear-btn" onclick="clearSearch()">Clear</button>
-    </div>
-    <div id="clipList"></div>
-  </div>
+  <div class="main" id="mainArea"></div>
 </div>
 
 <script src="index.js"></script>

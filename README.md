@@ -1,4 +1,4 @@
-# Sciurus! — AI-Powered Knowledge Capture
+ # Sciurus! — AI-Powered Knowledge Capture
 
 **Sciurus** (Latin: *squirrel*) — also meaning *shadow* and *tail*.
 
@@ -26,20 +26,22 @@ to context-switch between your app, your terminal, and a notes doc.
 
 1. Press `Ctrl+Shift+Q` (or your MX Master button)
 2. Capture popup appears with screenshot preview
-3. Type a quick note and hit Enter
+3. Type a quick note, optionally pick a category + project
 4. Gemini 2.5 Flash analyzes the screenshot + note (vision)
-5. Auto-categorized, tagged, and saved locally + synced to Google Sheets
-6. Browse, search, and manage clips in the main window
+5. Auto-categorized, tagged, and saved to PostgreSQL
+6. Browse, search, and manage clips in the tabbed notes viewer
 
 ## Features
 
 - **Clipboard watcher** — auto-detects new screenshots
 - **Gemini vision AI** — analyzes screenshots for smart categorization
 - **AI search** — natural language search across all clips
-- **Local-first storage** — instant, works offline (electron-store)
-- **Google Sheets sync** — background cloud backup
+- **PostgreSQL backend** — local Docker database for reliable storage
+- **Project organization** — group clips by project with dedicated views
+- **General Notes + Projects tabs** — tabbed interface for organized browsing
 - **System tray** — runs quietly in background
 - **Threaded comments** — add follow-up notes to any clip
+- **Settings panel** — configure capture, AI, and app behavior in-app
 
 ## Setup
 
@@ -48,33 +50,29 @@ to context-switch between your app, your terminal, and a notes doc.
 npm install
 ```
 
-### 2. Google Cloud Setup
+### 2. Start the database
+```bash
+docker-compose up -d
+```
+This starts a PostgreSQL 16 container (`sciurus-db`) with the schema
+auto-initialized. Data persists in a Docker named volume.
+
+### 3. Google Cloud Setup (for AI features)
 - Go to https://console.cloud.google.com/
 - Create a project (or use existing)
-- Enable the **Vertex AI API** and **Google Sheets API**
+- Enable the **Vertex AI API**
 - Go to Credentials > Create Credentials > **Service Account**
 - Download the JSON key and save as `credentials.json` in this folder
 
-This single service account powers both Gemini AI (via Vertex AI)
-and Google Sheets sync — all billed to your GCP credits.
-
-### 3. Google Sheets Sync (optional)
-
-#### Create & Configure the Sheet
-Due to Google Cloud restrictions, service accounts start with 0 bytes of
-Drive quota and cannot create new files. Create the sheet manually:
-
-1. Go to https://sheets.google.com and create a new blank spreadsheet
-2. Click **Share** and add your service account email as **Editor**
-   (find the email in `credentials.json` under `client_email`)
-3. Copy the Sheet ID from the URL:
-   `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit`
-4. Add to `.env`: `GOOGLE_SHEET_ID=<SHEET_ID>`
+This service account powers Gemini AI (via Vertex AI) — all billed
+to your GCP credits. AI features are optional; the app works without them.
 
 ### 4. Run Sciurus
 ```bash
 npm start
 ```
+
+The main window opens automatically on launch.
 
 ## Tip: One-Button Capture
 
@@ -88,19 +86,30 @@ Logitech's MX Master series) are great for this.
 ```
 sciurus/
 ├── src/
-│   ├── main.js          # Electron main process — tray, hotkey, IPC, Sheets sync
+│   ├── main.js          # Electron main process — tray, hotkey, IPC, DB
+│   ├── db.js            # PostgreSQL data access layer (pg)
 │   ├── ai.js            # Gemini 2.5 Flash via Vertex AI (vision + text)
-│   ├── sheets.js        # Google Sheets background sync
 │   └── preload.js       # Context bridge for renderer
 ├── renderer/
-│   ├── index.html       # Main window — clip browser
-│   ├── index.js         # Clip list, AI search, filtering
+│   ├── index.html       # Main window — tabbed notes viewer
+│   ├── index.js         # Tab logic, projects, clips, settings, AI search
 │   ├── index.css        # Main window styles
 │   ├── capture.html     # Capture popup
 │   ├── capture.js       # Capture popup logic
 │   └── capture.css      # Capture popup styles
-├── .env                 # API keys (git-ignored)
+├── docker/
+│   └── init.sql         # PostgreSQL schema + seed data
+├── docker-compose.yml   # PostgreSQL 16 container
+├── .env                 # Config (git-ignored)
 ├── .env.example         # Template for .env
 ├── credentials.json     # Google service account (git-ignored)
 └── package.json
 ```
+
+## Architecture
+
+- **Storage**: PostgreSQL 16 (Docker) — replaces electron-store + Google Sheets
+- **AI**: Gemini 2.5 Flash via Vertex AI for categorization + natural language search
+- **Frontend**: Electron with context-isolated renderers
+- **Tabs**: General Notes (unassigned clips), Projects (grouped by project), Settings
+- **Future**: Designed for integration with the AI dev workflow (Builder/Auditor/Reviewer)

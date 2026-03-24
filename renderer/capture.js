@@ -4,7 +4,9 @@
 
 let screenshotData = null;
 let selectedCat = '';
+let selectedProject = null;
 let categories = [];
+let projects = [];
 
 // ── Screenshot listener ──
 
@@ -17,12 +19,15 @@ window.quickclip.onScreenshot((dataURL) => {
   document.getElementById('commentInput').focus();
 });
 
-// ── Init: load categories ──
+// ── Init: load categories + projects ──
 
 (async () => {
-  categories = await window.quickclip.getCategories();
+  [categories, projects] = await Promise.all([
+    window.quickclip.getCategories(),
+    window.quickclip.getProjects(),
+  ]);
   renderCategories();
-  // Focus the comment input immediately so user can start typing
+  renderProjects();
   document.getElementById('commentInput').focus();
 })();
 
@@ -39,6 +44,33 @@ function renderCategories() {
     btn.onclick = () => {
       selectedCat = selectedCat === cat ? '' : cat;
       renderCategories();
+    };
+    wrap.appendChild(btn);
+  });
+}
+
+// ── Project Picker ──
+
+function renderProjects() {
+  const wrap = document.getElementById('projectWrap');
+  wrap.innerHTML = '';
+  if (projects.length === 0) {
+    wrap.innerHTML = '<span class="field-hint" style="font-size:11px;color:#555">No projects yet</span>';
+    return;
+  }
+  projects.forEach((proj) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = proj.name;
+    btn.className = 'cat-btn proj-btn' + (selectedProject === proj.id ? ' active' : '');
+    if (selectedProject === proj.id) {
+      btn.style.borderColor = proj.color;
+      btn.style.color = proj.color;
+      btn.style.background = proj.color + '22';
+    }
+    btn.onclick = () => {
+      selectedProject = selectedProject === proj.id ? null : proj.id;
+      renderProjects();
     };
     wrap.appendChild(btn);
   });
@@ -61,7 +93,6 @@ async function save() {
   const comment = document.getElementById('commentInput').value.trim();
   if (!comment && !screenshotData) return;
 
-  // Disable button to prevent double-click
   const btn = document.getElementById('saveBtn');
   btn.disabled = true;
   btn.textContent = 'Saving...';
@@ -72,6 +103,7 @@ async function save() {
       image: screenshotData,
       comment,
       category: selectedCat || 'Uncategorized',
+      project_id: selectedProject || null,
       tags: [],
       aiSummary: null,
       status: 'parked',
