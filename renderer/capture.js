@@ -1,48 +1,59 @@
+// renderer/capture.js — Capture popup: screenshot preview, note input, save
+
+// ── State ──
+
 let screenshotData = null;
 let selectedCat = '';
 let categories = [];
 
-// Listen for screenshot from main process
+// ── Screenshot listener ──
+
 window.quickclip.onScreenshot((dataURL) => {
   screenshotData = dataURL;
   document.getElementById('ssImg').src = dataURL;
-  document.getElementById('ssImg').style.display = 'block';
-  document.getElementById('emptyImg').style.display = 'none';
+  document.getElementById('ssImg').classList.remove('hidden');
+  document.getElementById('emptyImg').classList.add('hidden');
   updateSaveBtn();
   document.getElementById('commentInput').focus();
 });
 
-// Load categories
+// ── Init: load categories ──
+
 (async () => {
   categories = await window.quickclip.getCategories();
-  renderCats();
+  renderCategories();
 })();
 
-function renderCats() {
+// ── Category Picker ──
+
+function renderCategories() {
   const wrap = document.getElementById('catWrap');
   wrap.innerHTML = '';
-  categories.filter(c => c !== 'Uncategorized').forEach(cat => {
+  categories.filter((c) => c !== 'Uncategorized').forEach((cat) => {
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.textContent = cat;
-    btn.className = selectedCat === cat ? 'active' : '';
-    btn.style.cssText = `padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;
-      border:1px solid ${selectedCat===cat?'#3b82f6':'#333'};
-      background:${selectedCat===cat?'#3b82f622':'transparent'};
-      color:${selectedCat===cat?'#3b82f6':'#777'}`;
-    btn.onclick = () => { selectedCat = selectedCat===cat?'':cat; renderCats(); };
+    btn.className = 'cat-btn' + (selectedCat === cat ? ' active' : '');
+    btn.onclick = () => {
+      selectedCat = selectedCat === cat ? '' : cat;
+      renderCategories();
+    };
     wrap.appendChild(btn);
   });
 }
 
+// ── Save Button State ──
+
 function updateSaveBtn() {
   const comment = document.getElementById('commentInput').value.trim();
   const btn = document.getElementById('saveBtn');
-  const ok = comment || screenshotData;
-  btn.disabled = !ok;
-  btn.style.opacity = ok ? '1' : '0.35';
+  const canSave = comment || screenshotData;
+  btn.disabled = !canSave;
 }
 
 document.getElementById('commentInput').addEventListener('input', updateSaveBtn);
+
+// ── Actions ──
 
 async function save() {
   const comment = document.getElementById('commentInput').value.trim();
@@ -50,7 +61,7 @@ async function save() {
   const clip = {
     id: Date.now().toString(),
     image: screenshotData,
-    comment: comment,
+    comment,
     category: selectedCat || 'Uncategorized',
     tags: [],
     aiSummary: null,
