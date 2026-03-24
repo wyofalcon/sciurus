@@ -36,6 +36,7 @@ async function aiCategorize(clip) {
       if (result.category && clip.category === 'Uncategorized') updates.category = result.category;
       if (result.tags) updates.tags = result.tags;
       if (result.summary) updates.aiSummary = result.summary;
+      if (result.url) updates.url = result.url;
       if (Object.keys(updates).length) {
         await window.quickclip.updateClip(clip.id, updates);
         Object.assign(clip, updates);

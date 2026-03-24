@@ -34,11 +34,17 @@ function isEnabled() {
   return !!authClient && !!projectId;
 }
 
-async function callGemini(parts) {
+async function callGemini(systemInstruction, parts) {
   if (!isEnabled()) return null;
 
   const token = await authClient.getAccessToken();
   const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
+
+  const body = {
+    contents: [{ role: 'user', parts }],
+    systemInstruction: { parts: [{ text: systemInstruction }] },
+    generationConfig: { temperature: 0.3, maxOutputTokens: 600 },
+  };
 
   const res = await fetch(url, {
     method: 'POST',
@@ -46,10 +52,7 @@ async function callGemini(parts) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({
-      contents: [{ parts }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 500 },
-    }),
+    body: JSON.stringify(body),
   });
 
   const data = await res.json();
@@ -61,43 +64,84 @@ async function callGemini(parts) {
   return JSON.parse(clean);
 }
 
+// ── Categorization ──
+
+const CATEGORIZE_SYSTEM = `You are the AI backend for QuickClip, a desktop knowledge-capture tool.
+The user just captured a screenshot of something on their screen and wrote a short note about it.
+Your job is to analyze EVERYTHING available — the screenshot, the note, and any visible UI elements,
+URLs, text, or context in the image — and return structured metadata.
+
+Rules:
+- Pick the single best category from the existing list. Only invent a new one if nothing fits at all.
+  New categories should be broad and reusable (e.g. "Networking", not "That One VPN Thing").
+- Tags should be specific, lowercase, and useful for search (e.g. "powertoys", "clipboard", "ai").
+- The summary should capture WHY this is worth saving, not just describe the screenshot.
+- If you can see a URL in the screenshot or infer one from the content, include it.
+- Return ONLY valid JSON. No markdown fences, no explanation, no extra text.
+
+JSON schema:
+{
+  "category": "string — existing category or a new broad one",
+  "tags": ["string array — 2 to 5 short lowercase tags"],
+  "summary": "string — 1-2 sentences on what this is and why it matters",
+  "url": "string — extracted URL if visible, otherwise empty string"
+}`;
+
 async function categorize(comment, categories, imageDataURL = null) {
-  const prompt =
-    `You are a knowledge categorization assistant. Analyze the note` +
-    (imageDataURL ? ' and the attached screenshot' : '') +
-    `. Respond ONLY with valid JSON, no markdown:\n` +
-    `{"category":"best fit from ${JSON.stringify(categories)} or create a new broad one",` +
-    `"tags":["2-4","short","tags"],"summary":"1-line context, max 12 words"}\n\n` +
-    `Note: "${comment}"`;
+  const userText = `Existing categories: ${JSON.stringify(categories)}\n\nUser's note: "${comment}"`;
 
   const parts = [];
   if (imageDataURL) {
     const base64 = imageDataURL.replace(/^data:image\/\w+;base64,/, '');
     parts.push({ inline_data: { mime_type: 'image/png', data: base64 } });
   }
-  parts.push({ text: prompt });
+  parts.push({ text: userText });
 
   try {
-    return await callGemini(parts);
+    const result = await callGemini(CATEGORIZE_SYSTEM, parts);
+    // Validate expected keys
+    if (result) {
+      if (!result.category) result.category = 'Uncategorized';
+      if (!Array.isArray(result.tags)) result.tags = [];
+      if (!result.summary) result.summary = comment;
+      if (!result.url) result.url = '';
+    }
+    return result;
   } catch (e) {
     console.error('[AI] categorize error:', e.message);
     return null;
   }
 }
 
+// ── Search ──
+
+const SEARCH_SYSTEM = `You are the search backend for QuickClip, a knowledge-capture tool.
+The user is searching their saved clips using natural language. They may use vague phrasing,
+nicknames, or partial recall (e.g. "that paste thing for Marcus", "gpu driver fix from last week").
+
+You receive a list of clips with their metadata. Your job is to find the most relevant matches.
+Consider: the comment text, AI summary, tags, category, and any thread comments.
+Rank by relevance — best match first. Return between 0 and 10 results.
+
+Return ONLY a JSON array of clip ID strings, most relevant first. No markdown, no explanation.
+Example: ["1711234567890", "1711234512345"]
+If nothing matches, return: []`;
+
 async function search(query, clips) {
   const clipList = clips
-    .map(
-      (c) =>
-        `ID:${c.id}|Cat:${c.category}|Tags:${(c.tags || []).join(',')}|Comment:${c.comment}|AI:${c.aiSummary || ''}|Extra:${(c.comments || []).map((x) => x.text).join(';')}`
-    )
+    .map((c) => {
+      const parts = [`ID: ${c.id}`, `Category: ${c.category}`];
+      if (c.comment) parts.push(`Note: ${c.comment}`);
+      if (c.aiSummary) parts.push(`Summary: ${c.aiSummary}`);
+      if (c.tags?.length) parts.push(`Tags: ${c.tags.join(', ')}`);
+      if (c.comments?.length) parts.push(`Thread: ${c.comments.map((x) => x.text).join('; ')}`);
+      return parts.join(' | ');
+    })
     .join('\n');
 
   try {
-    return await callGemini([
-      {
-        text: `Find matching clips for: "${query}". Return ONLY a JSON array of IDs, most relevant first. No markdown.\nClips:\n${clipList}`,
-      },
+    return await callGemini(SEARCH_SYSTEM, [
+      { text: `Search query: "${query}"\n\nClips:\n${clipList}` },
     ]);
   } catch (e) {
     console.error('[AI] search error:', e.message);
