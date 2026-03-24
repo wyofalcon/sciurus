@@ -10,6 +10,18 @@ for you later. The shadow-tail meaning fits too: every idea casts a
 shadow you'll want to find again, and this tool is the tail that
 follows your train of thought so you don't have to.
 
+### Made for developers who build with AI
+
+When you're using AI-assisted coding tools to debug and build, you
+often hit multiple issues in rapid succession — a broken layout here,
+a failed API call there, an edge case you'll forget by the time you
+fix the first thing. Sciurus was built for exactly this. Screenshot
+each issue as you find it, add a quick note, and keep moving. The AI
+organizes everything behind the scenes so you can circle back later
+with a clean list instead of a foggy memory. Especially useful when
+you're working from a laptop with a single screen and can't afford
+to context-switch between your app, your terminal, and a notes doc.
+
 ## How It Works
 
 1. Press `Ctrl+Shift+Q` (or your MX Master button)
