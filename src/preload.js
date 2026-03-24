@@ -15,7 +15,7 @@ contextBridge.exposeInMainWorld('quickclip', {
   saveCategories: (cats) => ipcRenderer.invoke('save-categories', cats),
 
   // AI
-  aiCategorize: (comment) => ipcRenderer.invoke('ai-categorize', comment),
+  aiCategorize: (comment, imageData) => ipcRenderer.invoke('ai-categorize', comment, imageData),
   aiSearch: (query) => ipcRenderer.invoke('ai-search', query),
   hasApiKey: () => ipcRenderer.invoke('has-api-key'),
 

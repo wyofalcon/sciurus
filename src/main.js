@@ -1,7 +1,23 @@
+// Must clear before requiring electron — inherited from VS Code/Claude Code
+delete process.env.ELECTRON_RUN_AS_NODE;
+
 const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const Store = require('electron-store');
 const ai = require('./ai');
+const sheets = require('./sheets');
+
+// Load .env manually (dotenv v17 has breaking changes)
+const envPath = path.join(__dirname, '..', '.env');
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const match = line.match(/^([^#=]+)=(.*)$/);
+    if (match && !process.env[match[1].trim()]) {
+      process.env[match[1].trim()] = match[2].trim();
+    }
+  }
+}
 
 const store = new Store({ name: 'quickclip-data' });
 let tray = null;
@@ -98,16 +114,26 @@ function createTray() {
     { type: 'separator' },
     { label: 'Quit', click: () => app.exit() },
   ]);
-  tray.setToolTip('QuickClip ⚡');
+  tray.setToolTip('QuickClip');
   tray.setContextMenu(menu);
   tray.on('click', () => { mainWindow.show(); mainWindow.focus(); });
 }
 
+// ── Merge categories from Sheets ──
+async function syncCategories() {
+  if (!sheets.isEnabled()) return;
+  const sheetCats = await sheets.getCategories();
+  if (sheetCats && sheetCats.length) {
+    const local = store.get('categories', DEFAULT_CATS);
+    const merged = [...new Set([...local, ...sheetCats])];
+    store.set('categories', merged);
+    console.log(`[QuickClip] Categories synced: ${merged.length} total`);
+  }
+}
+
 // ── IPC Handlers ──
 ipcMain.handle('get-clips', () => store.get('clips', []));
-ipcMain.handle('get-categories', () => store.get('categories', [
-  'Uncategorized','cvstomize.com','PowerToys','LLM Setup','Hardware/GPU','Ideas','Code Patterns'
-]));
+ipcMain.handle('get-categories', () => store.get('categories', DEFAULT_CATS));
 ipcMain.handle('save-clip', (_, clip) => {
   const clips = store.get('clips', []);
   clips.unshift(clip);
@@ -118,7 +144,17 @@ ipcMain.handle('save-clip', (_, clip) => {
 ipcMain.handle('update-clip', (_, id, updates) => {
   const clips = store.get('clips', []);
   const idx = clips.findIndex(c => c.id === id);
-  if (idx !== -1) { clips[idx] = { ...clips[idx], ...updates }; store.set('clips', clips); }
+  if (idx !== -1) {
+    clips[idx] = { ...clips[idx], ...updates };
+    store.set('clips', clips);
+
+    // Sync to Sheets after AI categorization
+    if (updates.category || updates.tags || updates.aiSummary) {
+      sheets.saveClip(clips[idx]).catch(e =>
+        console.error('[Sheets] background sync error:', e.message)
+      );
+    }
+  }
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('clips-updated', clips);
   return true;
 });
@@ -129,9 +165,9 @@ ipcMain.handle('delete-clip', (_, id) => {
   return true;
 });
 ipcMain.handle('save-categories', (_, cats) => { store.set('categories', cats); return true; });
-ipcMain.handle('ai-categorize', async (_, comment) => {
+ipcMain.handle('ai-categorize', async (_, comment, imageData) => {
   const cats = store.get('categories', DEFAULT_CATS);
-  return ai.categorize(comment, cats);
+  return ai.categorize(comment, cats, imageData);
 });
 ipcMain.handle('ai-search', async (_, query) => {
   const clips = store.get('clips', []);
@@ -148,10 +184,12 @@ ipcMain.on('open-capture', () => {
 });
 
 // ── App Lifecycle ──
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createMainWindow();
   createTray();
   startClipboardWatcher();
+  sheets.init();
+  await syncCategories();
   globalShortcut.register('CommandOrControl+Shift+Q', () => {
     const img = clipboard.readImage();
     createCaptureWindow(img.isEmpty() ? null : img.toDataURL());

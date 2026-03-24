@@ -30,7 +30,7 @@ async function aiCategorize(clip) {
   document.getElementById('aiBar').style.display = 'flex';
   document.getElementById('aiBarMsg').textContent = 'AI categorizing...';
   try {
-    const result = await window.quickclip.aiCategorize(clip.comment);
+    const result = await window.quickclip.aiCategorize(clip.comment, clip.image);
     if (result) {
       const updates = {};
       if (result.category && clip.category === 'Uncategorized') updates.category = result.category;

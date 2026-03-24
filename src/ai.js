@@ -1,74 +1,80 @@
-// src/ai.js — AI categorization via Anthropic API
-// Reads API key from environment or config file
+// src/ai.js — AI categorization via Gemini API (vision-capable)
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
 
 function getApiKey() {
-  // Check environment variable first
-  if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
-  // Check config file
+  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
   try {
-    const cfgPath = path.join(__dirname, '..', '.env');
-    const content = fs.readFileSync(cfgPath, 'utf8');
-    const match = content.match(/ANTHROPIC_API_KEY=(.+)/);
+    const envPath = path.join(__dirname, '..', '.env');
+    const content = fs.readFileSync(envPath, 'utf8');
+    const match = content.match(/GEMINI_API_KEY=(.+)/);
     if (match) return match[1].trim();
   } catch (e) {}
   return null;
 }
 
-function callClaude(prompt) {
-  return new Promise((resolve, reject) => {
-    const key = getApiKey();
-    if (!key) { resolve(null); return; }
-    const body = JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
-      messages: [{ role: 'user', content: prompt }],
-    });
-    const req = https.request({
-      hostname: 'api.anthropic.com',
-      path: '/v1/messages',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-        'Content-Length': Buffer.byteLength(body),
-      },
-    }, (res) => {
-      let data = '';
-      res.on('data', (c) => data += c);
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          const text = parsed.content?.map(i => i.text||'').join('') || '';
-          const clean = text.replace(/```json|```/g, '').trim();
-          resolve(JSON.parse(clean));
-        } catch (e) { resolve(null); }
-      });
-    });
-    req.on('error', () => resolve(null));
-    req.write(body);
-    req.end();
+async function callGemini(parts) {
+  const key = getApiKey();
+  if (!key) return null;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts }],
+      generationConfig: { temperature: 0.3, maxOutputTokens: 500 },
+    }),
   });
+
+  const data = await res.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const clean = text.replace(/```json|```/g, '').trim();
+  return JSON.parse(clean);
 }
 
-async function categorize(comment, categories) {
-  return callClaude(
-    `You categorize quick notes. Respond ONLY with JSON, no markdown:\n`
-    + `{"category":"best from ${JSON.stringify(categories)}","tags":["2-4","short","tags"],"summary":"1-line context, max 12 words"}\n\n`
-    + `Note: "${comment}"`
-  );
+async function categorize(comment, categories, imageDataURL = null) {
+  const prompt =
+    `You are a knowledge categorization assistant. Analyze the note` +
+    (imageDataURL ? ' and the attached screenshot' : '') +
+    `. Respond ONLY with valid JSON, no markdown:\n` +
+    `{"category":"best fit from ${JSON.stringify(categories)} or create a new broad one",` +
+    `"tags":["2-4","short","tags"],"summary":"1-line context, max 12 words"}\n\n` +
+    `Note: "${comment}"`;
+
+  const parts = [];
+  if (imageDataURL) {
+    const base64 = imageDataURL.replace(/^data:image\/\w+;base64,/, '');
+    parts.push({ inline_data: { mime_type: 'image/png', data: base64 } });
+  }
+  parts.push({ text: prompt });
+
+  try {
+    return await callGemini(parts);
+  } catch (e) {
+    console.error('[AI] categorize error:', e.message);
+    return null;
+  }
 }
 
 async function search(query, clips) {
-  const clipList = clips.map(c =>
-    `ID:${c.id}|Cat:${c.category}|Tags:${(c.tags||[]).join(',')}|Comment:${c.comment}|AI:${c.aiSummary||''}|Extra:${(c.comments||[]).map(x=>x.text).join(';')}`
-  ).join('\n');
-  return callClaude(
-    `Find matching clips for: "${query}". Return ONLY a JSON array of IDs, most relevant first. No markdown.\nClips:\n${clipList}`
-  );
+  const clipList = clips
+    .map(
+      (c) =>
+        `ID:${c.id}|Cat:${c.category}|Tags:${(c.tags || []).join(',')}|Comment:${c.comment}|AI:${c.aiSummary || ''}|Extra:${(c.comments || []).map((x) => x.text).join(';')}`
+    )
+    .join('\n');
+
+  try {
+    return await callGemini([
+      {
+        text: `Find matching clips for: "${query}". Return ONLY a JSON array of IDs, most relevant first. No markdown.\nClips:\n${clipList}`,
+      },
+    ]);
+  } catch (e) {
+    console.error('[AI] search error:', e.message);
+    return null;
+  }
 }
 
 module.exports = { categorize, search, getApiKey };
