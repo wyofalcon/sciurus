@@ -1,9 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('quickclip', {
-  // Capture window
+  // Window controls
   onScreenshot: (cb) => ipcRenderer.on('new-screenshot', (_, data) => cb(data)),
   closeCapture: () => ipcRenderer.send('close-capture'),
+  hideMain: () => ipcRenderer.send('hide-main'),
   openCapture: () => ipcRenderer.send('open-capture'),
 
   // Data

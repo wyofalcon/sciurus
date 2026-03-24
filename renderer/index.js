@@ -23,6 +23,11 @@ const ALLOWED_CLIP_FIELDS = ['category', 'tags', 'aiSummary', 'url', 'status', '
   renderAll();
 })();
 
+// Escape hides the main window to tray
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') window.quickclip.hideMain();
+});
+
 window.quickclip.onClipsUpdated((updated) => {
   clips = updated;
   renderAll();

@@ -46,6 +46,7 @@ let captureWindow = null;
 let clipboardWatcher = null;
 let lastClipHash = null;
 let watcherPaused = false;
+let isQuitting = false;
 
 // ── Helpers ──
 
@@ -94,7 +95,12 @@ function createMainWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  mainWindow.on('close', (e) => { e.preventDefault(); mainWindow.hide(); });
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
 }
 
 function createCaptureWindow(imageDataURL) {
@@ -153,7 +159,7 @@ function createTray() {
       watcherPaused = item.checked;
     }},
     { type: 'separator' },
-    { label: 'Quit', click: () => app.exit() },
+    { label: 'Quit', click: () => { isQuitting = true; app.quit(); } },
   ]));
   tray.on('click', () => { mainWindow.show(); mainWindow.focus(); });
 }
@@ -235,6 +241,10 @@ ipcMain.on('close-capture', () => {
   if (captureWindow && !captureWindow.isDestroyed()) captureWindow.close();
 });
 
+ipcMain.on('hide-main', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+});
+
 ipcMain.on('open-capture', () => {
   createCaptureWindow(getClipboardImageURL());
 });
@@ -259,6 +269,7 @@ app.whenReady().then(async () => {
   });
 });
 
+app.on('before-quit', () => { isQuitting = true; });
 app.on('window-all-closed', (e) => e.preventDefault());
 
 app.on('will-quit', () => {
