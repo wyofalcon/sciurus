@@ -9,7 +9,7 @@ const { google } = require('googleapis');
 const MODEL = 'gemini-2.5-flash';
 const LOCATION = 'us-central1';
 const CREDENTIALS_PATH = path.join(__dirname, '..', 'credentials.json');
-const GENERATION_CONFIG = { temperature: 0.3, maxOutputTokens: 600 };
+const GENERATION_CONFIG = { temperature: 0.3, maxOutputTokens: 2048, thinkingConfig: { thinkingBudget: 0 } };
 
 // ── System Prompts ──
 

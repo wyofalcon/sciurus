@@ -179,6 +179,18 @@ async function syncCategories() {
 
 // ── Auto-Categorize ──
 
+/** Retry AI categorization for any uncategorized clips from previous sessions. */
+async function retryUncategorized() {
+  if (!ai.isEnabled()) return;
+  const clips = store.get('clips', []);
+  const pending = clips.filter((c) => c.category === 'Uncategorized' && c.comment);
+  if (!pending.length) return;
+  console.log(`[Sciurus] Retrying AI for ${pending.length} uncategorized clip(s)...`);
+  for (const clip of pending) {
+    await autoCategorize(clip.id, clip.comment, clip.image);
+  }
+}
+
 /** Run AI categorization in the background after a clip is saved. */
 async function autoCategorize(clipId, comment, imageData) {
   try {
@@ -232,7 +244,10 @@ ipcMain.handle('save-clip', async (_, clip) => {
 
   // Auto-categorize in the background (main process, always runs)
   if (clip.category === 'Uncategorized' && clip.comment && ai.isEnabled()) {
+    console.log(`[Sciurus] Starting AI categorization for: "${clip.comment.slice(0, 30)}"`);
     autoCategorize(clip.id, clip.comment, clip.image);
+  } else {
+    console.log(`[Sciurus] Skipping AI: cat=${clip.category} comment=${!!clip.comment} ai=${ai.isEnabled()}`);
   }
   return true;
 });
@@ -310,6 +325,7 @@ app.whenReady().then(async () => {
   ai.init();
   sheets.init();
   await syncCategories();
+  retryUncategorized();
   globalShortcut.register('CommandOrControl+Shift+Q', () => {
     createCaptureWindow(getClipboardImageURL());
   });
