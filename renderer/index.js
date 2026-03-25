@@ -337,7 +337,7 @@ function renderContent() {
   const el = document.getElementById('mainArea');
   if (activeTab === 'general') renderGeneralContent(el);
   else if (activeTab === 'projects') renderProjectsContent(el);
-  else if (activeTab === 'settings') renderSettingsContent(el);
+  else if (activeTab === 'settings') { renderSettingsContent(el); loadAiPrompt(); }
   else if (activeTab === 'help') renderHelpContent(el);
 }
 
@@ -797,6 +797,26 @@ function renderSettingsContent(el) {
       </div>
 
       <div class="settings-section">
+        <h3>AI Prompt Editor</h3>
+        <p class="setting-desc" style="margin-bottom:8px">
+          Customize how the AI categorizes your clips. This is the system prompt sent with every categorization request.
+        </p>
+        <div class="setting-row" style="flex-direction:column;align-items:stretch;gap:8px">
+          <textarea id="aiPromptEditor" class="setting-textarea" rows="12"
+            oninput="updateTokenCount()"
+            placeholder="Loading prompt..."></textarea>
+          <div class="prompt-meta">
+            <span id="tokenCount" class="token-count">~ 0 tokens</span>
+            <span id="tokenDiff" class="token-diff"></span>
+            <div class="prompt-actions">
+              <button type="button" class="btn-sm secondary" onclick="resetAiPrompt()">Reset to Default</button>
+              <button type="button" class="btn-sm primary" onclick="saveAiPrompt()">Save Prompt</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <h3>Database</h3>
         <div class="setting-row">
           <div class="setting-info">
@@ -829,6 +849,59 @@ async function updateSetting(section, key, value) {
   current[key] = value;
   settings[section] = current;
   await window.quickclip.saveSetting(section, current);
+}
+
+// ── AI Prompt Editor ──
+
+let defaultTokenCount = 0;
+
+async function loadAiPrompt() {
+  const editor = document.getElementById('aiPromptEditor');
+  if (!editor) return;
+  const prompt = await window.quickclip.getAiPrompt();
+  editor.value = prompt;
+  const defaultPrompt = await window.quickclip.getDefaultAiPrompt();
+  defaultTokenCount = await window.quickclip.estimateTokens(defaultPrompt);
+  updateTokenCount();
+}
+
+async function updateTokenCount() {
+  const editor = document.getElementById('aiPromptEditor');
+  const countEl = document.getElementById('tokenCount');
+  const diffEl = document.getElementById('tokenDiff');
+  if (!editor || !countEl) return;
+
+  const tokens = await window.quickclip.estimateTokens(editor.value);
+  countEl.textContent = `~ ${tokens.toLocaleString()} tokens`;
+
+  if (diffEl && defaultTokenCount > 0) {
+    const diff = tokens - defaultTokenCount;
+    if (diff > 0) {
+      diffEl.textContent = `(+${diff} vs default — higher API cost)`;
+      diffEl.className = 'token-diff warn';
+    } else if (diff < 0) {
+      diffEl.textContent = `(${diff} vs default — lower API cost)`;
+      diffEl.className = 'token-diff ok';
+    } else {
+      diffEl.textContent = '(same as default)';
+      diffEl.className = 'token-diff';
+    }
+  }
+}
+
+async function saveAiPrompt() {
+  const editor = document.getElementById('aiPromptEditor');
+  if (!editor) return;
+  await window.quickclip.saveAiPrompt(editor.value);
+  const btn = document.querySelector('.prompt-actions .primary');
+  if (btn) { btn.textContent = 'Saved!'; setTimeout(() => { btn.textContent = 'Save Prompt'; }, 1500); }
+}
+
+async function resetAiPrompt() {
+  const prompt = await window.quickclip.resetAiPrompt();
+  const editor = document.getElementById('aiPromptEditor');
+  if (editor) editor.value = prompt;
+  updateTokenCount();
 }
 
 // =====================================================================

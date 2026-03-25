@@ -427,6 +427,25 @@ ipcMain.handle('ai-search', async (_, query) => {
 
 ipcMain.handle('has-api-key', () => ai.isEnabled());
 
+// ── IPC Handlers: AI Prompt ──
+
+ipcMain.handle('get-ai-prompt', () => ai.getCategorizePrompt());
+ipcMain.handle('get-default-ai-prompt', () => ai.getDefaultCategorizePrompt());
+ipcMain.handle('estimate-tokens', (_, text) => ai.estimateTokens(text));
+
+ipcMain.handle('save-ai-prompt', async (_, prompt) => {
+  ai.setCategorizePrompt(prompt);
+  // Persist to DB settings
+  await db.saveSetting('ai_prompt', prompt || '');
+  return true;
+});
+
+ipcMain.handle('reset-ai-prompt', async () => {
+  ai.setCategorizePrompt(null);
+  await db.saveSetting('ai_prompt', '');
+  return ai.getDefaultCategorizePrompt();
+});
+
 ipcMain.handle('get-app-version', () => {
   const pkg = require('../package.json');
   return { version: pkg.version, electron: process.versions.electron, node: process.versions.node };
@@ -614,6 +633,13 @@ async function launchMainApp() {
 
   startClipboardWatcher();
   ai.init();
+
+  // Load custom AI prompt from DB if one was saved
+  const savedPrompt = await db.getSettings('ai_prompt');
+  if (savedPrompt && savedPrompt.trim()) {
+    ai.setCategorizePrompt(savedPrompt);
+    console.log('[Sciurus] Custom AI prompt loaded from settings');
+  }
   retryUncategorized();
 
   const hotkey = process.env.HOTKEY_COMBO || 'CommandOrControl+Shift+Q';

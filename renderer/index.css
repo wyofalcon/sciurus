@@ -674,6 +674,66 @@ body {
 .toggle input:checked + .toggle-slider { background: var(--accent-blue); }
 .toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
 
+/* ── AI Prompt Editor ── */
+
+.setting-textarea {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  padding: 10px;
+  outline: none;
+  resize: vertical;
+  line-height: 1.5;
+}
+.setting-textarea:focus { border-color: var(--accent-blue); }
+
+.prompt-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.token-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+.token-diff {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.token-diff.warn { color: var(--accent-amber); }
+.token-diff.ok { color: var(--accent-green); }
+
+.prompt-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.btn-sm {
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+}
+.btn-sm.primary {
+  background: var(--accent-blue);
+  color: #fff;
+}
+.btn-sm.primary:hover { filter: brightness(1.1); }
+.btn-sm.secondary {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  border: 1px solid var(--border-mid);
+}
+.btn-sm.secondary:hover { color: var(--text-primary); }
+
 /* ── Help Page ── */
 
 .help-page {

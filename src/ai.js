@@ -16,7 +16,9 @@ const SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 
 // ── System Prompts ──
 
-const CATEGORIZE_SYSTEM = `You are the AI backend for Sciurus, an ADHD-friendly knowledge-capture tool.
+let customCategorizePrompt = null; // loaded from DB settings at runtime
+
+const DEFAULT_CATEGORIZE_SYSTEM = `You are the AI backend for Sciurus, an ADHD-friendly knowledge-capture tool.
 The user just captured a screenshot of something on their screen and wrote a quick note about it.
 They're moving fast — your job is to do the organizing they don't have time for. Analyze EVERYTHING
 available — the screenshot, the note, and any visible UI elements, URLs, text, or context in the
@@ -202,7 +204,7 @@ async function categorize(comment, categories, imageDataURL = null, projects = n
   parts.push({ text: userText });
 
   try {
-    const result = await callGemini(CATEGORIZE_SYSTEM, parts);
+    const result = await callGemini(getCategorizePrompt(), parts);
     if (!result) return null;
     if (!result.category) result.category = 'Uncategorized';
     if (!Array.isArray(result.tags)) result.tags = [];
@@ -281,4 +283,30 @@ async function callGemini(systemInstruction, parts) {
   return JSON.parse(clean);
 }
 
-module.exports = { init, isEnabled, categorize, search };
+// ── Prompt Management ──
+
+function getCategorizePrompt() {
+  return customCategorizePrompt || DEFAULT_CATEGORIZE_SYSTEM;
+}
+
+function setCategorizePrompt(prompt) {
+  customCategorizePrompt = prompt && prompt.trim() ? prompt.trim() : null;
+}
+
+function getDefaultCategorizePrompt() {
+  return DEFAULT_CATEGORIZE_SYSTEM;
+}
+
+/**
+ * Rough token estimate — ~4 chars per token for English text.
+ * Not exact but gives users a useful ballpark.
+ */
+function estimateTokens(text) {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+
+module.exports = {
+  init, isEnabled, categorize, search,
+  getCategorizePrompt, setCategorizePrompt, getDefaultCategorizePrompt, estimateTokens,
+};
