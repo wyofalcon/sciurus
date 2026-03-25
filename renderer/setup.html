@@ -59,6 +59,13 @@
       <span class="spinner">*</span> Starting PostgreSQL container... this may take a moment on first run.
     </div>
 
+    <div id="linuxHint" class="info-box hidden">
+      <strong>Linux tip:</strong>
+      <p>For automatic project matching from window titles, install xdotool:</p>
+      <div class="link-box">sudo apt install xdotool</div>
+      <p>On GNOME Wayland this works automatically. Without xdotool, the app still works — you just won't get auto-categorization from window context.</p>
+    </div>
+
     <div class="step-actions">
       <button class="btn primary" id="step1Btn" onclick="runDbSetup()" disabled>Checking...</button>
     </div>

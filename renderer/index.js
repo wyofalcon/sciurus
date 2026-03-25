@@ -194,7 +194,9 @@ function renderHelpSidebar(el) {
     <button class="sb-btn" onclick="scrollHelpTo('capturing')">Capturing</button>
     <button class="sb-btn" onclick="scrollHelpTo('organizing')">Organizing</button>
     <button class="sb-btn" onclick="scrollHelpTo('projects')">Projects</button>
+    <button class="sb-btn" onclick="scrollHelpTo('smart-categorization')">Smart Categorization</button>
     <button class="sb-btn" onclick="scrollHelpTo('ai-features')">AI Features</button>
+    <button class="sb-btn" onclick="scrollHelpTo('database')">Database</button>
     <button class="sb-btn" onclick="scrollHelpTo('shortcuts')">Keyboard Shortcuts</button>
     <button class="sb-btn" onclick="scrollHelpTo('tips')">Tips</button>
   `;
@@ -267,14 +269,41 @@ function renderHelpContent(el) {
         </ul>
       </div>
 
+      <div class="help-section" id="help-smart-categorization">
+        <h3>Smart Categorization</h3>
+        <p>Sciurus uses a <strong>priority chain</strong> to categorize clips automatically:</p>
+        <ul>
+          <li><strong>1. Your selection</strong> — Manual category/project choice always wins</li>
+          <li><strong>2. Window context</strong> — Active window title + process name captured before popup opens. If the title contains a project's repo folder name, auto-assigned.</li>
+          <li><strong>3. Window rules</strong> — Custom pattern matching on window title or process name (regex supported)</li>
+          <li><strong>4. AI fallback</strong> — Only called if rules didn't categorize. Gemini analyzes screenshot + note + window context.</li>
+        </ul>
+        <p><strong>Markup colors:</strong> If you annotate with colored markers before capturing, AI reads the meaning:</p>
+        <ul>
+          <li><strong style="color:#ff4444">Red</strong> = bug, error, needs fixing</li>
+          <li><strong style="color:#10b981">Green</strong> = working, approved, keep this</li>
+          <li><strong style="color:#ec4899">Pink</strong> = question, needs discussion</li>
+        </ul>
+      </div>
+
       <div class="help-section" id="help-ai-features">
         <h3>AI Features</h3>
-        <p>Sciurus uses <strong>Gemini 2.5 Flash</strong> (Google Vertex AI) to analyze your screenshots and notes.</p>
+        <p>Sciurus uses <strong>Gemini 2.5 Flash</strong> for vision analysis and search. AI is optional — the rule engine handles most categorization without it.</p>
         <ul>
-          <li><strong>Auto-categorization:</strong> When you save a clip without a category, AI reads the screenshot + your note and picks the best category, generates tags, a summary, and extracts any URLs</li>
-          <li><strong>AI Search:</strong> Type a natural language query like <em>"that paste thing for Marcus"</em> and click AI Search. Gemini finds matching clips even with vague descriptions.</li>
-          <li><strong>Requires:</strong> A <code>credentials.json</code> file (GCP service account) with Vertex AI API enabled</li>
+          <li><strong>Auto-categorization:</strong> When rules don't match, AI reads the screenshot + note + window context and picks category, tags, summary, and URLs</li>
+          <li><strong>AI Search:</strong> Type a natural language query like <em>"that paste thing for Marcus"</em> and click AI Search</li>
+          <li><strong>Setup options:</strong> Free Gemini API key (recommended) or GCP Vertex AI service account. Configure in Settings or during first-run setup.</li>
         </ul>
+      </div>
+
+      <div class="help-section" id="help-database">
+        <h3>Database</h3>
+        <p>Sciurus supports two database backends:</p>
+        <ul>
+          <li><strong>SQLite (built-in)</strong> — Zero setup. Data stored locally. Perfect for personal use and distribution.</li>
+          <li><strong>PostgreSQL (Docker)</strong> — For power users. Run <code>docker compose up -d</code> to start.</li>
+        </ul>
+        <p>Screenshots are saved to disk (not in the database) for performance. Set <code>DB_BACKEND</code> in .env to <code>pg</code>, <code>sqlite</code>, or <code>auto</code>.</p>
       </div>
 
       <div class="help-section" id="help-shortcuts">

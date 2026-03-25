@@ -202,6 +202,10 @@ function finishSetup() {
 (async () => {
   document.getElementById('step1Btn').disabled = false;
   document.getElementById('step1Btn').textContent = 'Check & Setup';
+  // Show Linux hint on Linux
+  if (navigator.platform.startsWith('Linux')) {
+    document.getElementById('linuxHint').classList.remove('hidden');
+  }
   // Auto-start checks
   checkDocker();
 })();
