@@ -58,6 +58,8 @@ CREATE TABLE clips (
     url         VARCHAR(2000) DEFAULT NULL,
     status      VARCHAR(10) NOT NULL DEFAULT 'parked' CHECK (status IN ('active', 'parked')),
     timestamp   BIGINT NOT NULL,
+    window_title  TEXT DEFAULT NULL,
+    process_name  VARCHAR(255) DEFAULT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -104,3 +106,20 @@ CREATE TRIGGER trg_projects_updated_at
 CREATE TRIGGER trg_settings_updated_at
     BEFORE UPDATE ON settings
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Window rules for rule-based categorization
+CREATE TABLE window_rules (
+    id          SERIAL PRIMARY KEY,
+    pattern     VARCHAR(500) NOT NULL,
+    match_field VARCHAR(20) NOT NULL DEFAULT 'window_title'
+                CHECK (match_field IN ('window_title', 'process_name', 'both')),
+    match_type  VARCHAR(10) NOT NULL DEFAULT 'contains'
+                CHECK (match_type IN ('contains', 'startswith', 'regex')),
+    category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+    project_id  INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    priority    INTEGER DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_clips_process ON clips(process_name);
+CREATE INDEX idx_window_rules_priority ON window_rules(priority DESC);

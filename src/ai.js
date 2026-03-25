@@ -19,17 +19,51 @@ They're moving fast — your job is to do the organizing they don't have time fo
 available — the screenshot, the note, and any visible UI elements, URLs, text, or context in the
 image — and return structured metadata so they can find this later.
 
-Rules:
+Rules for CATEGORY:
 - Pick the single best category from the existing list. Only invent a new one if nothing fits at all.
   New categories should be broad and reusable (e.g. "Networking", not "That One VPN Thing").
+- Consider the full context: what app is visible, what topic the note describes, what kind of
+  problem or task this relates to, and any text visible in the screenshot.
+- If the screenshot shows code, a terminal, or a dev tool — look at what project/repo/file is
+  visible and match it to the best category.
+
+Rules for PROJECT:
+- You may also receive a list of projects. Each project has a name, description, and optionally
+  a local repo path.
+- If the screenshot or note clearly relates to one of these projects, include its ID in your response.
+- Match by: visible repo/folder names in the screenshot, file paths, project names in window titles
+  or tab titles, topic alignment between the note and the project description, or any other clue.
+- If no project matches, return null for project_id. Do NOT force a match.
+- Repo path matching: if the screenshot shows a path like "C:\\Users\\...\\projects\\cvstomize"
+  and a project has repo_path "C:\\Users\\...\\projects\\cvstomize", that's a strong match.
+
+Rules for TAGS:
 - Tags should be specific, lowercase, and useful for search (e.g. "powertoys", "clipboard", "ai").
+- Include the project name as a tag if you assign a project.
+- Include technology names, tool names, and key concepts visible in the screenshot.
+
+Rules for SUMMARY:
 - The summary should capture WHY this is worth saving, not just describe the screenshot.
+- Be specific — mention the tool, feature, error, or concept. 1-2 sentences max.
+
+Rules for MARKUP COLORS:
+- The user annotates screenshots with colored markers before capturing. The colors have meaning:
+  - RED marker = bug, error, or problem that needs fixing
+  - GREEN marker = working correctly, approved, or "keep this"
+  - PINK marker = question, needs discussion, or "ask about this"
+- If you see colored markup/annotations on the screenshot, factor the color meaning into your
+  category, tags, and summary. For example, red markup on a stack trace → tag with "bug".
+- Include a "markup" tag (e.g. "markup-red", "markup-green", "markup-pink") if annotations are visible.
+
+Rules for URL:
 - If you can see a URL in the screenshot or infer one from the content, include it.
-- Return ONLY valid JSON. No markdown fences, no explanation, no extra text.
+
+Return ONLY valid JSON. No markdown fences, no explanation, no extra text.
 
 JSON schema:
 {
   "category": "string — existing category or a new broad one",
+  "project_id": "number or null — ID of the matching project, or null if none",
   "tags": ["string array — 2 to 5 short lowercase tags"],
   "summary": "string — 1-2 sentences on what this is and why it matters",
   "url": "string — extracted URL if visible, otherwise empty string"
@@ -40,7 +74,7 @@ The user is searching their saved clips using natural language. They may use vag
 nicknames, or partial recall (e.g. "that paste thing for Marcus", "gpu driver fix from last week").
 
 You receive a list of clips with their metadata. Your job is to find the most relevant matches.
-Consider: the comment text, AI summary, tags, category, and any thread comments.
+Consider: the comment text, AI summary, tags, category, project name, and any thread comments.
 Rank by relevance — best match first. Return between 0 and 10 results.
 
 Return ONLY a JSON array of clip ID strings, most relevant first. No markdown, no explanation.
@@ -49,40 +83,85 @@ If nothing matches, return: []`;
 
 // ── State ──
 
+let authMode = 'none'; // 'apikey' | 'vertex' | 'none'
 let authClient = null;
 let projectId = null;
+let geminiApiKey = null;
 
 // ── Public API ──
 
-/** Initialize Vertex AI auth using the GCP service account. */
+/** Initialize AI — supports Gemini API key (simple) or Vertex AI service account (advanced). */
 function init() {
-  if (!fs.existsSync(CREDENTIALS_PATH)) {
-    console.log('[AI] No credentials.json — AI disabled.');
-    return false;
+  const mode = process.env.AI_AUTH_MODE || 'auto';
+
+  // Try API key first (simplest)
+  if (mode === 'apikey' || mode === 'auto') {
+    const key = process.env.GEMINI_API_KEY;
+    if (key && key.trim()) {
+      geminiApiKey = key.trim();
+      authMode = 'apikey';
+      console.log(`[AI] Gemini API key ready (model: ${MODEL})`);
+      return true;
+    }
   }
-  try {
-    const creds = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
-    projectId = creds.project_id;
-    authClient = new google.auth.GoogleAuth({
-      keyFile: CREDENTIALS_PATH,
-      scopes: ['https://www.googleapis.com/auth/cloud-platform'],
-    });
-    console.log(`[AI] Vertex AI ready (project: ${projectId}, model: ${MODEL})`);
-    return true;
-  } catch (e) {
-    console.error('[AI] Init failed:', e.message);
-    return false;
+
+  // Try Vertex AI (service account)
+  if (mode === 'vertex' || mode === 'auto') {
+    if (fs.existsSync(CREDENTIALS_PATH)) {
+      try {
+        const creds = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
+        projectId = creds.project_id;
+        authClient = new google.auth.GoogleAuth({
+          keyFile: CREDENTIALS_PATH,
+          scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+        });
+        authMode = 'vertex';
+        console.log(`[AI] Vertex AI ready (project: ${projectId}, model: ${MODEL})`);
+        return true;
+      } catch (e) {
+        console.error('[AI] Vertex AI init failed:', e.message);
+      }
+    }
   }
+
+  console.log('[AI] No AI credentials configured — AI disabled.');
+  authMode = 'none';
+  return false;
 }
 
-/** Returns true if Vertex AI is configured and ready. */
+/** Returns true if any AI auth is configured and ready. */
 function isEnabled() {
-  return !!authClient && !!projectId;
+  return authMode !== 'none';
 }
 
-/** Categorize a clip using Gemini vision. Returns structured metadata or null. */
-async function categorize(comment, categories, imageDataURL = null) {
-  const userText = `Existing categories: ${JSON.stringify(categories)}\n\nUser's note: "${comment}"`;
+/**
+ * Categorize a clip using Gemini vision. Returns structured metadata or null.
+ * @param {string} comment - User's note
+ * @param {string[]} categories - Existing category names
+ * @param {string|null} imageDataURL - Screenshot as data URL
+ * @param {Array|null} projects - Array of {id, name, description, repo_path} for project matching
+ */
+async function categorize(comment, categories, imageDataURL = null, projects = null, windowMeta = null) {
+  let userText = `Existing categories: ${JSON.stringify(categories)}\n\n`;
+
+  if (projects && projects.length > 0) {
+    const projectList = projects.map((p) => {
+      const parts = [`ID: ${p.id}`, `Name: ${p.name}`];
+      if (p.description) parts.push(`Description: ${p.description}`);
+      if (p.repo_path) parts.push(`Repo: ${p.repo_path}`);
+      return parts.join(' | ');
+    }).join('\n');
+    userText += `Projects:\n${projectList}\n\n`;
+  } else {
+    userText += `Projects: none\n\n`;
+  }
+
+  if (windowMeta && (windowMeta.windowTitle || windowMeta.processName)) {
+    userText += `Window context: title="${windowMeta.windowTitle || ''}", process="${windowMeta.processName || ''}"\n\n`;
+  }
+
+  userText += `User's note: "${comment}"`;
+
   const parts = [];
   if (imageDataURL) {
     const base64 = imageDataURL.replace(/^data:image\/\w+;base64,/, '');
@@ -98,6 +177,13 @@ async function categorize(comment, categories, imageDataURL = null) {
     if (!Array.isArray(result.tags)) result.tags = [];
     if (!result.summary) result.summary = comment;
     if (!result.url) result.url = '';
+    // Normalize project_id
+    if (result.project_id !== undefined && result.project_id !== null) {
+      result.project_id = parseInt(result.project_id, 10);
+      if (isNaN(result.project_id)) result.project_id = null;
+    } else {
+      result.project_id = null;
+    }
     return result;
   } catch (e) {
     console.error('[AI] Categorize error:', e.message);
@@ -113,6 +199,7 @@ async function search(query, clips) {
       if (c.comment) fields.push(`Note: ${c.comment}`);
       if (c.aiSummary) fields.push(`Summary: ${c.aiSummary}`);
       if (c.tags?.length) fields.push(`Tags: ${c.tags.join(', ')}`);
+      if (c.projectName) fields.push(`Project: ${c.projectName}`);
       if (c.comments?.length) fields.push(`Thread: ${c.comments.map((x) => x.text).join('; ')}`);
       return fields.join(' | ');
     })
@@ -130,20 +217,27 @@ async function search(query, clips) {
 
 // ── Internal ──
 
-/** Send a request to the Vertex AI Gemini endpoint and parse the JSON response. */
+/** Send a request to Gemini and parse the JSON response. Supports both API key and Vertex AI. */
 async function callGemini(systemInstruction, parts) {
   if (!isEnabled()) return null;
 
-  const token = await authClient.getAccessToken();
-  const url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}`
-    + `/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
+  let url, headers;
+
+  if (authMode === 'apikey') {
+    // Google AI Studio / Gemini API (simple key auth)
+    url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${geminiApiKey}`;
+    headers = { 'Content-Type': 'application/json' };
+  } else {
+    // Vertex AI (service account auth)
+    const token = await authClient.getAccessToken();
+    url = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${projectId}`
+      + `/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
+    headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+  }
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
     body: JSON.stringify({
       contents: [{ role: 'user', parts }],
       systemInstruction: { parts: [{ text: systemInstruction }] },

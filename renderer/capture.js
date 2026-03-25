@@ -3,6 +3,7 @@
 // ── State ──
 
 let screenshotData = null;
+let windowMeta = null;
 let selectedCat = '';
 let selectedProject = null;
 let categories = [];
@@ -10,8 +11,9 @@ let projects = [];
 
 // ── Screenshot listener ──
 
-window.quickclip.onScreenshot((dataURL) => {
+window.quickclip.onScreenshot((dataURL, meta) => {
   screenshotData = dataURL;
+  windowMeta = meta || null;
   document.getElementById('ssImg').src = dataURL;
   document.getElementById('ssImg').classList.remove('hidden');
   document.getElementById('emptyImg').classList.add('hidden');
@@ -109,6 +111,8 @@ async function save() {
       status: 'parked',
       timestamp: Date.now(),
       comments: [],
+      window_title: windowMeta?.title || null,
+      process_name: windowMeta?.processName || null,
     };
     await window.quickclip.saveClip(clip);
     window.quickclip.closeCapture();

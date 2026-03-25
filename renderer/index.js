@@ -7,6 +7,7 @@ let clips = [];
 let categories = [];
 let projects = [];
 let settings = {};
+let appVersion = null;
 
 // General Notes tab state
 let filterCat = 'All';
@@ -22,6 +23,7 @@ let selectedProjectId = null;
 (async () => {
   const hasKey = await window.quickclip.hasApiKey();
   if (!hasKey) document.getElementById('noKeyBanner').style.display = 'block';
+  appVersion = await window.quickclip.getAppVersion();
   await loadData();
   renderAll();
 })();
@@ -73,6 +75,13 @@ function switchTab(tab) {
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
   });
+  // Highlight header icon buttons for settings/help
+  document.querySelectorAll('.hdr-icon-btn').forEach((btn) => btn.classList.remove('active'));
+  if (tab === 'settings' || tab === 'help') {
+    const icons = document.querySelectorAll('.hdr-icon-btn');
+    if (tab === 'help' && icons[0]) icons[0].classList.add('active');
+    if (tab === 'settings' && icons[1]) icons[1].classList.add('active');
+  }
   renderAll();
 }
 
@@ -112,6 +121,8 @@ function updateStatusBar() {
     sub.textContent = `${generalClips.length} general notes` + (parked > 0 ? ` · ${parked} parked` : '');
   } else if (activeTab === 'projects') {
     sub.textContent = `${projects.length} project${projects.length !== 1 ? 's' : ''} · ${clips.length} total clips`;
+  } else if (activeTab === 'help') {
+    sub.textContent = 'Help — how to use Sciurus';
   } else {
     sub.textContent = 'App settings';
   }
@@ -126,6 +137,7 @@ function renderSidebar() {
   if (activeTab === 'general') renderGeneralSidebar(el);
   else if (activeTab === 'projects') renderProjectsSidebar(el);
   else if (activeTab === 'settings') renderSettingsSidebar(el);
+  else if (activeTab === 'help') renderHelpSidebar(el);
 }
 
 function renderGeneralSidebar(el) {
@@ -137,7 +149,7 @@ function renderGeneralSidebar(el) {
     const count = cat === 'All' ? generalClips.length : generalClips.filter((c) => c.category === cat).length;
     if (cat !== 'All' && count === 0) return;
     const active = filterCat === cat ? 'active' : '';
-    html += `<button class="sb-btn ${active}" onclick="setCat('${escAttr(cat)}')">`
+    html += `<button class="sb-btn ${active}" onclick="setCat('${escAttr(cat)}')" title="Filter by ${escAttr(cat)}">`
       + `<span>${esc(cat)}</span><span class="sb-count">${count}</span></button>`;
   });
 
@@ -167,9 +179,124 @@ function renderProjectsSidebar(el) {
 }
 
 function renderSettingsSidebar(el) {
+  const ver = appVersion ? `v${appVersion.version}` : '';
   el.innerHTML = `
     <div class="sec">Settings</div>
     <button class="sb-btn active">All Settings</button>
+    <div class="sidebar-version">${esc(ver)}</div>
+  `;
+}
+
+function renderHelpSidebar(el) {
+  el.innerHTML = `
+    <div class="sec">Help</div>
+    <button class="sb-btn active" onclick="scrollHelpTo('getting-started')">Getting Started</button>
+    <button class="sb-btn" onclick="scrollHelpTo('capturing')">Capturing</button>
+    <button class="sb-btn" onclick="scrollHelpTo('organizing')">Organizing</button>
+    <button class="sb-btn" onclick="scrollHelpTo('projects')">Projects</button>
+    <button class="sb-btn" onclick="scrollHelpTo('ai-features')">AI Features</button>
+    <button class="sb-btn" onclick="scrollHelpTo('shortcuts')">Keyboard Shortcuts</button>
+    <button class="sb-btn" onclick="scrollHelpTo('tips')">Tips</button>
+  `;
+}
+
+function scrollHelpTo(id) {
+  const target = document.getElementById('help-' + id);
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderHelpContent(el) {
+  const ver = appVersion || { version: '?' };
+  el.innerHTML = `
+    <div class="help-page">
+      <h2>Help — Sciurus! v${esc(ver.version)}</h2>
+
+      <div class="help-section" id="help-getting-started">
+        <h3>Getting Started</h3>
+        <p>Sciurus is an AI-powered knowledge capture tool. Screenshot anything on your screen,
+        add a quick note, and let AI organize it for you.</p>
+        <div class="help-steps">
+          <div class="help-step"><span class="help-num">1</span>Press <kbd>Ctrl+Shift+Q</kbd> or click <strong>Capture</strong></div>
+          <div class="help-step"><span class="help-num">2</span>A popup appears with your screenshot preview</div>
+          <div class="help-step"><span class="help-num">3</span>Type a quick note describing what it is</div>
+          <div class="help-step"><span class="help-num">4</span>Optionally pick a category and/or project</div>
+          <div class="help-step"><span class="help-num">5</span>Press <kbd>Enter</kbd> — done! AI handles the rest</div>
+        </div>
+      </div>
+
+      <div class="help-section" id="help-capturing">
+        <h3>Capturing</h3>
+        <p><strong>Automatic detection:</strong> Sciurus watches your clipboard. When you take a screenshot
+        (Win+Shift+S, Print Screen, or any snipping tool), the capture popup opens automatically.</p>
+        <p><strong>Manual capture:</strong> Click the <strong>Capture</strong> button in the header or press
+        <kbd>Ctrl+Shift+Q</kbd> at any time.</p>
+        <p><strong>The capture popup:</strong></p>
+        <ul>
+          <li><strong>Comment box</strong> — Describe what you captured. This is the main context for AI categorization.</li>
+          <li><strong>Category</strong> — Optional. Pick one or let AI choose for you.</li>
+          <li><strong>Project</strong> — Optional. Assign to a project or leave in General Notes.</li>
+          <li><strong>Park It</strong> — Saves the clip. You can also press Enter.</li>
+        </ul>
+      </div>
+
+      <div class="help-section" id="help-organizing">
+        <h3>Organizing Notes</h3>
+        <p><strong>General Notes tab:</strong> Shows all clips not assigned to a project. Use the sidebar to filter by category or status.</p>
+        <ul>
+          <li><strong>Categories</strong> — Filter by topic (AI creates these automatically)</li>
+          <li><strong>Status: Parked vs Active</strong> — Click the status badge on a clip to toggle. Parked = saved for later. Active = working on it now.</li>
+          <li><strong>Search</strong> — Type keywords in the search bar to filter clips instantly</li>
+          <li><strong>Move to project</strong> — Use the "Move..." dropdown on any clip to assign it to a project</li>
+        </ul>
+        <p><strong>Clip cards:</strong></p>
+        <ul>
+          <li>Click the <strong>thumbnail</strong> to expand/collapse the full screenshot</li>
+          <li>Click <strong>+ Comment</strong> to add a follow-up note (threaded)</li>
+          <li>Click <strong>x</strong> to delete a clip</li>
+        </ul>
+      </div>
+
+      <div class="help-section" id="help-projects">
+        <h3>Projects</h3>
+        <p>Group your notes by project — great for tracking issues across multiple repos or work streams.</p>
+        <ul>
+          <li><strong>Create a project:</strong> Go to the Projects tab and click <strong>+ New Project</strong></li>
+          <li><strong>Assign clips:</strong> Use the "Move..." dropdown on any General Notes clip, or select a project in the capture popup</li>
+          <li><strong>Unassign:</strong> Inside a project, click the <strong>&larr;</strong> arrow on a clip to move it back to General Notes</li>
+          <li><strong>Repo path:</strong> Optionally link a project to a local folder path for future auto-detection</li>
+        </ul>
+      </div>
+
+      <div class="help-section" id="help-ai-features">
+        <h3>AI Features</h3>
+        <p>Sciurus uses <strong>Gemini 2.5 Flash</strong> (Google Vertex AI) to analyze your screenshots and notes.</p>
+        <ul>
+          <li><strong>Auto-categorization:</strong> When you save a clip without a category, AI reads the screenshot + your note and picks the best category, generates tags, a summary, and extracts any URLs</li>
+          <li><strong>AI Search:</strong> Type a natural language query like <em>"that paste thing for Marcus"</em> and click AI Search. Gemini finds matching clips even with vague descriptions.</li>
+          <li><strong>Requires:</strong> A <code>credentials.json</code> file (GCP service account) with Vertex AI API enabled</li>
+        </ul>
+      </div>
+
+      <div class="help-section" id="help-shortcuts">
+        <h3>Keyboard Shortcuts</h3>
+        <table class="help-table">
+          <tr><td><kbd>Ctrl+Shift+Q</kbd></td><td>Quick capture (global — works from any app)</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Save clip (in capture popup) / Run AI search</td></tr>
+          <tr><td><kbd>Escape</kbd></td><td>Close capture popup / Hide main window to tray</td></tr>
+        </table>
+      </div>
+
+      <div class="help-section" id="help-tips">
+        <h3>Tips</h3>
+        <ul>
+          <li><strong>One-button capture:</strong> Map Ctrl+Shift+Q to a spare mouse button (like Logitech MX Master) for zero-friction capture</li>
+          <li><strong>Don't overthink the note:</strong> A few words is enough — AI fills in the details</li>
+          <li><strong>Use projects for sprints:</strong> Create a project per feature or bug hunt, then review all notes when you're done</li>
+          <li><strong>Thread comments:</strong> Come back to a clip later and add follow-up notes — great for tracking progress on an issue</li>
+          <li><strong>Hover anything:</strong> Most buttons and elements have tooltips — hover for 1-2 seconds to see what they do</li>
+        </ul>
+      </div>
+    </div>
   `;
 }
 
@@ -182,6 +309,7 @@ function renderContent() {
   if (activeTab === 'general') renderGeneralContent(el);
   else if (activeTab === 'projects') renderProjectsContent(el);
   else if (activeTab === 'settings') renderSettingsContent(el);
+  else if (activeTab === 'help') renderHelpContent(el);
 }
 
 // ── General Notes ──
@@ -190,8 +318,9 @@ function renderGeneralContent(el) {
   let html = `<div class="search-bar">
     <input id="searchInput" placeholder='Search or ask "that paste thing for Marcus"'
       value="${escAttr(searchQuery)}"
+      title="Type keywords to filter, or a natural language query for AI Search"
       onkeydown="if(event.key==='Enter')doAiSearch()" />
-    <button type="button" class="ai-btn" id="aiSearchBtn" onclick="doAiSearch()">AI Search</button>
+    <button type="button" class="ai-btn" id="aiSearchBtn" onclick="doAiSearch()" title="Use Gemini AI to find clips with natural language">AI Search</button>
   </div>`;
 
   if (aiMatchedIds) {
@@ -531,9 +660,16 @@ function renderSettingsContent(el) {
   const capture = settings.capture || { hotkey: 'ctrl+shift+q', watchClipboard: true, pollInterval: 500, autoCategory: true };
   const aiSettings = settings.ai || { enabled: true, autoCategorizeonSave: true, retryUncategorizedOnStartup: true };
 
+  const ver = appVersion || { version: '?', electron: '?', node: '?' };
+
   el.innerHTML = `
     <div class="settings-page">
       <h2>Settings</h2>
+
+      <div class="version-banner">
+        Sciurus! v${esc(ver.version)}
+        <span class="version-detail">Electron ${esc(ver.electron)} · Node ${esc(ver.node)}</span>
+      </div>
 
       <div class="settings-section">
         <h3>General</h3>
@@ -681,8 +817,8 @@ function renderClipCard(c, inProject) {
   // Header row
   html += `<div class="clip-hdr">`;
   html += `<div class="clip-meta">`;
-  html += `<span class="badge ${statusClass}" onclick="toggleStatus('${id}')">${statusLabel}</span>`;
-  html += `<span class="cat-badge">${esc(c.category)}</span>`;
+  html += `<span class="badge ${statusClass}" onclick="toggleStatus('${id}')" title="Click to toggle between Active and Parked">${statusLabel}</span>`;
+  html += `<span class="cat-badge" title="Category — assigned by AI or manually">${esc(c.category)}</span>`;
   if (c.projectName && !inProject) {
     html += `<span class="proj-badge" style="border-color:${esc(c.projectColor || '#3b82f6')}">${esc(c.projectName)}</span>`;
   }
@@ -703,19 +839,19 @@ function renderClipCard(c, inProject) {
     html += `<button class="del-btn" onclick="unassignClip('${id}')" title="Move to General Notes">&#x2190;</button>`;
   }
 
-  html += `<button class="del-btn" onclick="deleteClip('${id}')">&#x2715;</button>`;
+  html += `<button class="del-btn" onclick="deleteClip('${id}')" title="Delete this clip">&#x2715;</button>`;
   html += `</div></div>`;
 
   // Screenshot
   if (c.image) {
-    html += `<img src="${esc(c.image)}" onclick="this.classList.toggle('expanded')" />`;
+    html += `<img src="${esc(c.image)}" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse screenshot" />`;
   }
 
   // Comment
   if (c.comment) html += `<div class="comment">${esc(c.comment)}</div>`;
 
   // AI summary
-  if (c.aiSummary) html += `<div class="ai-summary">${esc(c.aiSummary)}</div>`;
+  if (c.aiSummary) html += `<div class="ai-summary" title="AI-generated summary">${esc(c.aiSummary)}</div>`;
 
   // Tags
   if (c.tags && c.tags.length) {
@@ -732,7 +868,7 @@ function renderClipCard(c, inProject) {
   }
 
   // Add comment input
-  html += `<button class="add-comment-btn" onclick="showCommentInput('${id}')">+ Comment</button>`;
+  html += `<button class="add-comment-btn" onclick="showCommentInput('${id}')" title="Add a follow-up note to this clip">+ Comment</button>`;
   html += `<div id="ci-${id}" style="display:none;margin-top:6px">`;
   html += `<input class="comment-input" id="cin-${id}" placeholder="Add a thought..." `
     + `onkeydown="if(event.key==='Enter')addComment('${id}');if(event.key==='Escape')hideCommentInput('${id}')" />`;
@@ -810,10 +946,12 @@ async function aiCategorize(clip) {
     if (result.tags) updates.tags = result.tags;
     if (result.summary) updates.aiSummary = result.summary;
     if (result.url) updates.url = result.url;
+    if (result.project_id && !clip.project_id) updates.project_id = result.project_id;
     if (Object.keys(updates).length) {
       await window.quickclip.updateClip(clip.id, updates);
       clips = await window.quickclip.getClips();
       categories = await window.quickclip.getCategories();
+      projects = await window.quickclip.getProjects();
       renderAll();
     }
   } catch (e) {

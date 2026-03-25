@@ -1,21 +1,24 @@
 {
   "name": "sciurus",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Sciurus! — ADHD-friendly knowledge capture. Screenshot, note, done. AI handles the rest.",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "set SCIURUS_DEV=1 && electron .",
     "build": "electron-builder --win",
-    "pack": "electron-builder --dir"
+    "pack": "electron-builder --dir",
+    "postinstall": "electron-rebuild"
   },
   "dependencies": {
+    "better-sqlite3": "^11.0.0",
     "dotenv": "^17.3.1",
     "electron-store": "^8.1.0",
     "googleapis": "^171.4.0",
     "pg": "^8.13.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.0.0",
     "electron": "^33.4.11",
     "electron-builder": "^25.0.0"
   },
@@ -29,6 +32,20 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false
-    }
+    },
+    "files": [
+      "src/**/*",
+      "renderer/**/*",
+      "scripts/**/*",
+      "package.json"
+    ],
+    "extraFiles": [
+      {
+        "from": "scripts",
+        "to": "scripts",
+        "filter": ["**/*"]
+      }
+    ],
+    "publish": null
   }
 }

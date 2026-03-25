@@ -9,14 +9,17 @@
 <!-- Header -->
 <div class="header">
   <div class="header-left">
-    <h1>Sciurus!</h1>
+    <h1 title="Sciurus! — AI-powered knowledge capture">Sciurus!</h1>
     <div class="tab-bar">
-      <button type="button" class="tab active" data-tab="general" onclick="switchTab('general')">General Notes</button>
-      <button type="button" class="tab" data-tab="projects" onclick="switchTab('projects')">Projects</button>
-      <button type="button" class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</button>
+      <button type="button" class="tab active" data-tab="general" onclick="switchTab('general')" title="Clips not assigned to any project">General Notes</button>
+      <button type="button" class="tab" data-tab="projects" onclick="switchTab('projects')" title="Organize clips by project">Projects</button>
     </div>
   </div>
-  <button type="button" class="cap-btn" onclick="openCapture()">Capture</button>
+  <div class="header-right">
+    <button type="button" class="hdr-icon-btn" onclick="switchTab('help')" title="Help — how to use Sciurus">?</button>
+    <button type="button" class="hdr-icon-btn" onclick="switchTab('settings')" title="Settings — configure capture, AI, and app behavior">&#x2699;</button>
+    <button type="button" class="cap-btn" onclick="openCapture()" title="Take a quick screenshot capture (Ctrl+Shift+Q)">Capture</button>
+  </div>
 </div>
 <div id="aiBar" class="ai-bar hidden">
   <span class="spinner">*</span><span id="aiBarMsg">AI categorizing...</span>

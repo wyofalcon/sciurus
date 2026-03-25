@@ -8,6 +8,8 @@ const path = require('path');
 const fs = require('fs');
 const db = require('./db');
 const ai = require('./ai');
+const rules = require('./rules');
+const { getActiveWindow } = require('./window-info');
 
 // ── .env loader (manual — dotenv v17 changed its API) ──
 
@@ -21,6 +23,16 @@ if (fs.existsSync(ENV_PATH)) {
   }
 }
 
+// ── Single Instance Lock ──
+// When clicking the desktop icon again, focus the existing window instead of launching a second instance
+
+if (app) {
+  const gotLock = app.requestSingleInstanceLock();
+  if (!gotLock) {
+    app.quit();
+  }
+}
+
 // ── Constants ──
 
 const CLIPBOARD_POLL_MS = 500;
@@ -30,6 +42,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ALLOWED_CLIP_FIELDS = [
   'category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment',
+  'window_title', 'process_name',
 ];
 
 // Tiny 32x32 fallback icon (transparent PNG) for the system tray
@@ -41,6 +54,7 @@ const FALLBACK_TRAY_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAA
 let tray = null;
 let mainWindow = null;
 let captureWindow = null;
+let setupWindow = null;
 let clipboardWatcher = null;
 let lastClipHash = null;
 let watcherPaused = false;
@@ -79,7 +93,37 @@ function sanitizeUpdates(updates) {
   return clean;
 }
 
+// ── First-Run Detection ──
+
+function isFirstRun() {
+  const envPath = path.join(__dirname, '..', '.env');
+  // Also check if SQLite DB exists (for users who skipped Docker setup)
+  let sqlitePath = null;
+  try { sqlitePath = path.join(app.getPath('userData'), 'sciurus.db'); } catch {}
+  return !fs.existsSync(envPath) && (!sqlitePath || !fs.existsSync(sqlitePath));
+}
+
 // ── Windows ──
+
+function createSetupWindow() {
+  setupWindow = new BrowserWindow({
+    width: 580, height: 680, show: false,
+    title: 'Sciurus — Setup',
+    backgroundColor: '#13131f',
+    resizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  setupWindow.loadFile(path.join(__dirname, '..', 'renderer', 'setup.html'));
+  setupWindow.once('ready-to-show', () => {
+    setupWindow.show();
+    setupWindow.focus();
+  });
+  setupWindow.on('closed', () => { setupWindow = null; });
+}
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -101,10 +145,12 @@ function createMainWindow() {
   });
 }
 
-function createCaptureWindow(imageDataURL) {
+function createCaptureWindow(imageDataURL, windowMeta = null) {
   if (captureWindow && !captureWindow.isDestroyed()) {
+    captureWindow.show();
     captureWindow.focus();
-    captureWindow.webContents.send('new-screenshot', imageDataURL);
+    captureWindow.webContents.focus();
+    captureWindow.webContents.send('new-screenshot', imageDataURL, windowMeta);
     return;
   }
   const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
@@ -123,7 +169,9 @@ function createCaptureWindow(imageDataURL) {
   captureWindow.loadFile(path.join(__dirname, '..', 'renderer', 'capture.html'));
   captureWindow.once('ready-to-show', () => {
     captureWindow.show();
-    if (imageDataURL) captureWindow.webContents.send('new-screenshot', imageDataURL);
+    captureWindow.focus();
+    captureWindow.webContents.focus();
+    if (imageDataURL) captureWindow.webContents.send('new-screenshot', imageDataURL, windowMeta);
   });
   captureWindow.on('closed', () => { captureWindow = null; });
 }
@@ -138,7 +186,12 @@ function startClipboardWatcher() {
     if (hash && hash !== lastClipHash) {
       lastClipHash = hash;
       const url = getClipboardImageURL();
-      if (url) createCaptureWindow(url);
+      if (url) {
+        // Capture active window metadata BEFORE opening popup
+        const windowMeta = getActiveWindow();
+        console.log(`[Sciurus] Window context: ${windowMeta.processName} — ${windowMeta.title}`);
+        createCaptureWindow(url, windowMeta);
+      }
     }
   }, CLIPBOARD_POLL_MS);
 }
@@ -199,10 +252,11 @@ async function retryUncategorized() {
 }
 
 /** Run AI categorization in the background after a clip is saved. */
-async function autoCategorize(clipId, comment, imageData) {
+async function autoCategorize(clipId, comment, imageData, windowTitle = null, processName = null) {
   try {
     const cats = await db.getCategories();
-    const result = await ai.categorize(comment, cats, imageData);
+    const projects = await db.getProjects();
+    const result = await ai.categorize(comment, cats, imageData, projects, { windowTitle, processName });
     if (!result) return;
 
     const updates = {};
@@ -210,6 +264,17 @@ async function autoCategorize(clipId, comment, imageData) {
     if (result.tags) updates.tags = result.tags;
     if (result.summary) updates.aiSummary = result.summary;
     if (result.url) updates.url = result.url;
+
+    // AI-suggested project assignment (only if clip isn't already assigned)
+    const clip = await db.getClip(clipId);
+    if (result.project_id && (!clip || !clip.project_id)) {
+      // Verify the project actually exists
+      const proj = await db.getProject(result.project_id);
+      if (proj) {
+        updates.project_id = result.project_id;
+        console.log(`[Sciurus] AI assigned to project: ${proj.name}`);
+      }
+    }
 
     if (Object.keys(updates).length) {
       await db.updateClip(clipId, updates);
@@ -220,6 +285,7 @@ async function autoCategorize(clipId, comment, imageData) {
       }
 
       notifyMainWindow('clips-changed');
+      if (updates.project_id) notifyMainWindow('projects-changed');
     }
     console.log(`[Sciurus] AI categorized: "${comment.slice(0, 30)}" → ${result.category}`);
   } catch (e) {
@@ -235,13 +301,27 @@ ipcMain.handle('get-clips-for-project', (_, projectId) => db.getClips(projectId)
 
 ipcMain.handle('save-clip', async (_, clip) => {
   if (!clip || typeof clip.id !== 'string') return false;
+
+  // Rule-based categorization (before saving — so the clip gets correct initial values)
+  if (clip.category === 'Uncategorized' || !clip.project_id) {
+    const ruleResult = await rules.categorize(clip.window_title, clip.process_name);
+    if (clip.category === 'Uncategorized' && ruleResult.category) {
+      clip.category = ruleResult.category;
+      console.log(`[Sciurus] Rules matched category: ${ruleResult.category}`);
+    }
+    if (!clip.project_id && ruleResult.projectId) {
+      clip.project_id = ruleResult.projectId;
+      console.log(`[Sciurus] Rules matched project ID: ${ruleResult.projectId}`);
+    }
+  }
+
   await db.saveClip(clip);
   notifyMainWindow('clips-changed');
 
-  // Auto-categorize in the background
+  // AI categorization as fallback — only if still uncategorized after rules
   if (clip.category === 'Uncategorized' && clip.comment && ai.isEnabled()) {
     console.log(`[Sciurus] Starting AI categorization for: "${clip.comment.slice(0, 30)}"`);
-    autoCategorize(clip.id, clip.comment, clip.image);
+    autoCategorize(clip.id, clip.comment, clip.image, clip.window_title, clip.process_name);
   }
   return true;
 });
@@ -314,7 +394,8 @@ ipcMain.handle('save-setting', async (_, key, value) => {
 
 ipcMain.handle('ai-categorize', async (_, comment, imageData) => {
   const cats = await db.getCategories();
-  return ai.categorize(comment, cats, imageData);
+  const projects = await db.getProjects();
+  return ai.categorize(comment, cats, imageData, projects);
 });
 
 ipcMain.handle('ai-search', async (_, query) => {
@@ -323,6 +404,13 @@ ipcMain.handle('ai-search', async (_, query) => {
 });
 
 ipcMain.handle('has-api-key', () => ai.isEnabled());
+
+ipcMain.handle('get-app-version', () => {
+  const pkg = require('../package.json');
+  return { version: pkg.version, electron: process.versions.electron, node: process.versions.node };
+});
+
+ipcMain.handle('get-db-backend', () => db.getBackendName());
 
 // ── IPC Handlers: Window Controls ──
 
@@ -338,6 +426,130 @@ ipcMain.on('open-capture', () => {
   createCaptureWindow(getClipboardImageURL());
 });
 
+// ── IPC Handlers: Setup Wizard ──
+
+const { execSync, exec } = require('child_process');
+
+ipcMain.handle('setup-check-docker', async () => {
+  try {
+    const out = execSync('docker --version', { encoding: 'utf8', timeout: 5000 });
+    const match = out.match(/Docker version ([\d.]+)/);
+    return { installed: true, version: match ? match[1] : '' };
+  } catch {
+    return { installed: false };
+  }
+});
+
+ipcMain.handle('setup-check-db', async () => {
+  try {
+    const out = execSync('docker ps --filter name=sciurus-db --format "{{.Status}}"', { encoding: 'utf8', timeout: 5000 });
+    return { running: out.trim().length > 0 };
+  } catch {
+    return { running: false };
+  }
+});
+
+ipcMain.handle('setup-start-db', async () => {
+  return new Promise((resolve) => {
+    const composeFile = path.join(__dirname, '..', 'docker-compose.yml');
+    exec(`docker-compose -f "${composeFile}" up -d`, { timeout: 120000 }, (err, stdout, stderr) => {
+      if (err) {
+        console.error('[Setup] docker-compose failed:', stderr);
+        resolve({ ok: false, error: stderr.split('\n')[0] || err.message });
+      } else {
+        // Wait a moment for the health check
+        setTimeout(async () => {
+          try {
+            const ready = await db.init();
+            resolve({ ok: ready });
+          } catch {
+            resolve({ ok: false, error: 'Database started but connection failed' });
+          }
+        }, 3000);
+      }
+    });
+  });
+});
+
+ipcMain.handle('setup-check-credentials', async () => {
+  const credPath = path.join(__dirname, '..', 'credentials.json');
+  if (!fs.existsSync(credPath)) return { found: false };
+  try {
+    const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
+    return { found: true, projectId: creds.project_id || null };
+  } catch {
+    return { found: false };
+  }
+});
+
+ipcMain.handle('setup-save-env', async (_, key, value) => {
+  const envPath = path.join(__dirname, '..', '.env');
+  let content = '';
+  if (fs.existsSync(envPath)) {
+    content = fs.readFileSync(envPath, 'utf8');
+  }
+  // Replace existing key or append
+  const regex = new RegExp(`^${key}=.*$`, 'm');
+  if (regex.test(content)) {
+    content = content.replace(regex, `${key}=${value}`);
+  } else {
+    content = content.trimEnd() + `\n${key}=${value}\n`;
+  }
+  fs.writeFileSync(envPath, content, 'utf8');
+  // Also set in current process
+  process.env[key] = value;
+  return true;
+});
+
+ipcMain.handle('setup-use-sqlite', async () => {
+  process.env.DB_BACKEND = 'sqlite';
+  try {
+    const ok = await db.init();
+    return { ok };
+  } catch {
+    return { ok: false };
+  }
+});
+
+ipcMain.handle('setup-finish', async () => {
+  const envPath = path.join(__dirname, '..', '.env');
+  let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+
+  // Always write hotkey default
+  const defaults = { HOTKEY_COMBO: 'ctrl+shift+q' };
+
+  // Only write PostgreSQL defaults if not using SQLite
+  if (process.env.DB_BACKEND !== 'sqlite') {
+    Object.assign(defaults, {
+      DB_BACKEND: 'pg',
+      POSTGRES_HOST: 'localhost',
+      POSTGRES_PORT: '5433',
+      POSTGRES_DB: 'sciurus',
+      POSTGRES_USER: 'sciurus',
+      POSTGRES_PASSWORD: 'sciurus_dev',
+    });
+  } else {
+    if (!content.includes('DB_BACKEND=')) {
+      content += `DB_BACKEND=sqlite\n`;
+      process.env.DB_BACKEND = 'sqlite';
+    }
+  }
+
+  for (const [k, v] of Object.entries(defaults)) {
+    if (!content.includes(`${k}=`)) {
+      content += `${k}=${v}\n`;
+      process.env[k] = v;
+    }
+  }
+  fs.writeFileSync(envPath, content, 'utf8');
+
+  // Close setup window and launch the main app
+  if (setupWindow && !setupWindow.isDestroyed()) {
+    setupWindow.close();
+  }
+  await launchMainApp();
+});
+
 // ── Auto-launch on login ──
 
 if (app.isPackaged) {
@@ -346,8 +558,9 @@ if (app.isPackaged) {
 
 // ── App Lifecycle ──
 
-app.whenReady().then(async () => {
-  createMainWindow();
+/** Launch the main app (called after setup or directly on normal start). */
+async function launchMainApp() {
+  if (!mainWindow) createMainWindow();
   createTray();
 
   // Initialize database (waits for Docker PostgreSQL)
@@ -355,17 +568,18 @@ app.whenReady().then(async () => {
   if (!dbReady) {
     dialog.showErrorBox(
       'Sciurus — Database Error',
-      'Could not connect to PostgreSQL.\n\nMake sure Docker is running:\n  docker-compose up -d\n\nThen restart Sciurus.'
+      'Could not initialize any database backend.\n\nEither:\n  • Start Docker: docker-compose up -d\n  • Or install better-sqlite3: npm install\n\nThen restart Sciurus.'
     );
     isQuitting = true;
     app.quit();
     return;
   }
+  console.log(`[Sciurus] Database backend: ${db.getBackendName()}`);
 
   // One-time migration from electron-store
   await migrateIfNeeded();
 
-  // Show the main window on launch
+  // Show the main window
   mainWindow.show();
   mainWindow.focus();
 
@@ -375,8 +589,28 @@ app.whenReady().then(async () => {
 
   const hotkey = process.env.HOTKEY_COMBO || 'CommandOrControl+Shift+Q';
   globalShortcut.register(hotkey, () => {
-    createCaptureWindow(getClipboardImageURL());
+    const windowMeta = getActiveWindow();
+    createCaptureWindow(getClipboardImageURL(), windowMeta);
   });
+}
+
+app.on('second-instance', () => {
+  const win = mainWindow || setupWindow;
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+});
+
+app.whenReady().then(async () => {
+  if (isFirstRun()) {
+    // Show setup wizard for new users
+    createSetupWindow();
+  } else {
+    // Normal launch
+    await launchMainApp();
+  }
 });
 
 app.on('before-quit', () => { isQuitting = true; });

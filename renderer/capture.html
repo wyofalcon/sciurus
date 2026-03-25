@@ -8,7 +8,7 @@
 
 <div class="hdr drag">
   <h2>Quick Capture</h2>
-  <button type="button" class="xbtn nd" onclick="closeWin()">&#x2715;</button>
+  <button type="button" class="xbtn nd" onclick="closeWin()" title="Close without saving (Esc)">&#x2715;</button>
 </div>
 
 <div class="img-wrap nd" id="imgWrap">
@@ -25,6 +25,7 @@
   <input id="commentInput" type="text"
     class="field-input"
     placeholder='e.g. "Advanced Paste in PowerToys - show Marcus"'
+    title="Describe what you captured — a few words is enough, AI fills in the rest"
     onkeydown="if(event.key==='Enter')save();if(event.key==='Escape')closeWin()" />
 </div>
 
@@ -47,7 +48,7 @@
   <span id="aiMsg">AI categorizing...</span>
 </div>
 
-<button type="button" id="saveBtn" class="save-btn nd" onclick="save()" disabled>
+<button type="button" id="saveBtn" class="save-btn nd" onclick="save()" disabled title="Save this clip (Enter)">
   Park It
 </button>
 <div class="save-hint">Enter to save &middot; Esc to close</div>

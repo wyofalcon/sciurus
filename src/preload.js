@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('quickclip', {
   // Window controls
-  onScreenshot: (cb) => ipcRenderer.on('new-screenshot', (_, data) => cb(data)),
+  onScreenshot: (cb) => ipcRenderer.on('new-screenshot', (_, data, meta) => cb(data, meta)),
   closeCapture: () => ipcRenderer.send('close-capture'),
   hideMain: () => ipcRenderer.send('hide-main'),
   openCapture: () => ipcRenderer.send('open-capture'),
@@ -36,7 +36,20 @@ contextBridge.exposeInMainWorld('quickclip', {
   aiSearch: (query) => ipcRenderer.invoke('ai-search', query),
   hasApiKey: () => ipcRenderer.invoke('has-api-key'),
 
+  // App info
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
   // Events
   onClipsChanged: (cb) => ipcRenderer.on('clips-changed', () => cb()),
   onProjectsChanged: (cb) => ipcRenderer.on('projects-changed', () => cb()),
+
+  // Setup wizard
+  checkDocker: () => ipcRenderer.invoke('setup-check-docker'),
+  checkDb: () => ipcRenderer.invoke('setup-check-db'),
+  startDb: () => ipcRenderer.invoke('setup-start-db'),
+  checkCredentials: () => ipcRenderer.invoke('setup-check-credentials'),
+  useSqlite: () => ipcRenderer.invoke('setup-use-sqlite'),
+  getDbBackend: () => ipcRenderer.invoke('get-db-backend'),
+  saveEnvValue: (key, value) => ipcRenderer.invoke('setup-save-env', key, value),
+  finishSetup: () => ipcRenderer.invoke('setup-finish'),
 });
