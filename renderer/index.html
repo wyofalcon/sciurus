@@ -1,18 +1,25 @@
 <!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;">
 <title>Sciurus!</title>
 <link rel="stylesheet" href="index.css">
 </head><body>
 
 <!-- Header -->
 <div class="header">
-  <div>
-    <h1>Sciurus!</h1>
-    <div class="sub" id="subtitle">Screenshot &rarr; Comment &rarr; Done. AI handles the rest.</div>
+  <div class="header-left">
+    <h1 title="Sciurus! — AI-powered knowledge capture">Sciurus!</h1>
+    <div class="tab-bar">
+      <button type="button" class="tab active" data-tab="general" onclick="switchTab('general')" title="Clips not assigned to any project">General Notes</button>
+      <button type="button" class="tab" data-tab="projects" onclick="switchTab('projects')" title="Organize clips by project">Projects</button>
+    </div>
   </div>
-  <button type="button" class="cap-btn" onclick="openCapture()">Capture</button>
+  <div class="header-right">
+    <button type="button" class="hdr-icon-btn" onclick="switchTab('help')" title="Help — how to use Sciurus">?</button>
+    <button type="button" class="hdr-icon-btn" onclick="switchTab('settings')" title="Settings — configure capture, AI, and app behavior">&#x2699;</button>
+    <button type="button" class="cap-btn" onclick="openCapture()" title="Take a quick screenshot capture (Ctrl+Shift+Q)">Capture</button>
+  </div>
 </div>
 <div id="aiBar" class="ai-bar hidden">
   <span class="spinner">*</span><span id="aiBarMsg">AI categorizing...</span>
@@ -20,30 +27,16 @@
 <div id="noKeyBanner" class="no-key-banner hidden">
   No credentials found. Add credentials.json (GCP service account) to the project folder.
 </div>
+<div id="statusBar" class="status-bar">
+  <span id="subtitle">Loading...</span>
+</div>
 
+<!-- Main Layout -->
 <div class="layout">
   <!-- Sidebar -->
-  <div class="sidebar">
-    <div class="sec">Categories</div>
-    <div id="catList"></div>
-    <div class="sec">Status</div>
-    <button type="button" class="sb-btn active" onclick="setStatus('all')" data-status="all">All</button>
-    <button type="button" class="sb-btn" onclick="setStatus('parked')" data-status="parked">Parked</button>
-    <button type="button" class="sb-btn" onclick="setStatus('active')" data-status="active">Active</button>
-  </div>
+  <div class="sidebar" id="sidebar"></div>
   <!-- Main Content -->
-  <div class="main" id="mainArea">
-    <div class="search-bar">
-      <input id="searchInput" placeholder='Search or ask "that paste thing for Marcus"'
-        onkeydown="if(event.key==='Enter')doAiSearch()" />
-      <button type="button" class="ai-btn" id="aiSearchBtn" onclick="doAiSearch()">AI Search</button>
-    </div>
-    <div id="aiResultBar" class="ai-result-bar hidden">
-      <span id="aiResultText"></span>
-      <button type="button" class="clear-btn" onclick="clearSearch()">Clear</button>
-    </div>
-    <div id="clipList"></div>
-  </div>
+  <div class="main" id="mainArea"></div>
 </div>
 
 <script src="index.js"></script>
