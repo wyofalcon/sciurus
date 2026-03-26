@@ -108,9 +108,35 @@ body {
 }
 .field-input:focus { border-color: var(--accent-blue); }
 
-/* ── Category Picker ── */
+/* ── Field Header with Toggle ── */
 
-.cat-wrap { display: flex; gap: 5px; flex-wrap: wrap; }
+.field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+.toggle-arrow {
+  background: none; border: none; color: var(--text-dim);
+  font-size: 10px; cursor: pointer; padding: 2px 4px;
+}
+.toggle-arrow:hover { color: var(--text-primary); }
+
+.collapsible {
+  overflow: hidden;
+  max-height: 200px;
+  transition: max-height 0.2s ease, opacity 0.2s ease;
+  opacity: 1;
+}
+.collapsible.collapsed {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+}
+
+/* ── Category / Project Picker ── */
+
+.cat-wrap { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 4px; }
 
 .cat-btn {
   padding: 3px 10px;
@@ -126,6 +152,35 @@ body {
   background: #3b82f622;
   color: var(--accent-blue);
 }
+
+/* ── Inline Add Forms ── */
+
+.add-btn {
+  background: none; border: none; color: var(--text-dim);
+  font-size: 10px; cursor: pointer; padding: 2px 0;
+}
+.add-btn:hover { color: var(--accent-blue); }
+
+.inline-form {
+  display: flex; gap: 4px; margin-top: 4px;
+}
+.inline-input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 4px 8px;
+  outline: none;
+}
+.inline-input:focus { border-color: var(--accent-blue); }
+.inline-ok {
+  background: var(--accent-blue); color: #fff; border: none;
+  border-radius: 6px; font-size: 11px; font-weight: 600;
+  padding: 4px 10px; cursor: pointer;
+}
+.inline-ok:hover { filter: brightness(1.1); }
 
 /* ── AI Status ── */
 

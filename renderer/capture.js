@@ -18,7 +18,12 @@ window.quickclip.onScreenshot((dataURL, meta) => {
   document.getElementById('ssImg').classList.remove('hidden');
   document.getElementById('emptyImg').classList.add('hidden');
   updateSaveBtn();
-  document.getElementById('commentInput').focus();
+  // Force focus to comment input — delay ensures Electron window is fully active
+  setTimeout(() => {
+    const input = document.getElementById('commentInput');
+    input.focus();
+    input.click(); // ensures caret is placed inside the input
+  }, 100);
 });
 
 // ── Init: load categories + projects ──
@@ -32,6 +37,15 @@ window.quickclip.onScreenshot((dataURL, meta) => {
   renderProjects();
   document.getElementById('commentInput').focus();
 })();
+
+// ── Section Toggles ──
+
+function toggleSection(id) {
+  const section = document.getElementById(id + 'Section');
+  const arrow = document.getElementById(id + 'Toggle');
+  const collapsed = section.classList.toggle('collapsed');
+  arrow.textContent = collapsed ? '\u25B6' : '\u25BC';
+}
 
 // ── Category Picker ──
 
@@ -49,6 +63,26 @@ function renderCategories() {
     };
     wrap.appendChild(btn);
   });
+}
+
+function showAddCategory() {
+  document.getElementById('addCatForm').classList.remove('hidden');
+  document.getElementById('newCatInput').focus();
+}
+
+function hideAddCategory() {
+  document.getElementById('addCatForm').classList.add('hidden');
+  document.getElementById('newCatInput').value = '';
+}
+
+async function addCategory() {
+  const name = document.getElementById('newCatInput').value.trim();
+  if (!name) return;
+  await window.quickclip.saveCategories([name]);
+  if (!categories.includes(name)) categories.push(name);
+  selectedCat = name;
+  renderCategories();
+  hideAddCategory();
 }
 
 // ── Project Picker ──
@@ -76,6 +110,28 @@ function renderProjects() {
     };
     wrap.appendChild(btn);
   });
+}
+
+function showAddProject() {
+  document.getElementById('addProjForm').classList.remove('hidden');
+  document.getElementById('newProjInput').focus();
+}
+
+function hideAddProject() {
+  document.getElementById('addProjForm').classList.add('hidden');
+  document.getElementById('newProjInput').value = '';
+}
+
+async function addProject() {
+  const name = document.getElementById('newProjInput').value.trim();
+  if (!name) return;
+  const newProj = await window.quickclip.createProject({ name });
+  if (newProj) {
+    projects.push(newProj);
+    selectedProject = newProj.id;
+    renderProjects();
+  }
+  hideAddProject();
 }
 
 // ── Save Button State ──

@@ -21,26 +21,49 @@
 </div>
 
 <div class="field nd">
-  <label class="field-label">What is this?</label>
+  <label class="field-label">Note it</label>
   <input id="commentInput" type="text"
     class="field-input"
     placeholder='e.g. "Advanced Paste in PowerToys - show Marcus"'
     title="Describe what you captured — a few words is enough, AI fills in the rest"
+    autofocus
     onkeydown="if(event.key==='Enter')save();if(event.key==='Escape')closeWin()" />
 </div>
 
 <div class="field nd">
-  <label class="field-label">
-    Category <span class="field-hint">— optional, AI picks if you skip</span>
-  </label>
-  <div id="catWrap" class="cat-wrap"></div>
+  <div class="field-header">
+    <label class="field-label" onclick="toggleSection('cat')">
+      Category <span class="field-hint">— optional, AI picks if you skip</span>
+    </label>
+    <button type="button" class="toggle-arrow" id="catToggle" onclick="toggleSection('cat')" title="Show/hide categories">&#x25BC;</button>
+  </div>
+  <div id="catSection" class="collapsible">
+    <div id="catWrap" class="cat-wrap"></div>
+    <button type="button" class="add-btn" onclick="showAddCategory()" title="Add new category">+ New</button>
+    <div id="addCatForm" class="inline-form hidden">
+      <input id="newCatInput" class="inline-input" placeholder="Category name"
+        onkeydown="if(event.key==='Enter')addCategory();if(event.key==='Escape')hideAddCategory()" />
+      <button type="button" class="inline-ok" onclick="addCategory()">Add</button>
+    </div>
+  </div>
 </div>
 
 <div class="field nd">
-  <label class="field-label">
-    Project <span class="field-hint">— optional, defaults to General Notes</span>
-  </label>
-  <div id="projectWrap" class="cat-wrap"></div>
+  <div class="field-header">
+    <label class="field-label" onclick="toggleSection('proj')">
+      Project <span class="field-hint">— optional, defaults to General Notes</span>
+    </label>
+    <button type="button" class="toggle-arrow" id="projToggle" onclick="toggleSection('proj')" title="Show/hide projects">&#x25BC;</button>
+  </div>
+  <div id="projSection" class="collapsible">
+    <div id="projectWrap" class="cat-wrap"></div>
+    <button type="button" class="add-btn" onclick="showAddProject()" title="Add new project">+ New</button>
+    <div id="addProjForm" class="inline-form hidden">
+      <input id="newProjInput" class="inline-input" placeholder="Project name"
+        onkeydown="if(event.key==='Enter')addProject();if(event.key==='Escape')hideAddProject()" />
+      <button type="button" class="inline-ok" onclick="addProject()">Add</button>
+    </div>
+  </div>
 </div>
 
 <div id="aiStatus" class="ai-status hidden">
