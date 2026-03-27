@@ -50,6 +50,8 @@ const SCHEMA = `
     ai_summary    TEXT DEFAULT NULL,
     url           TEXT DEFAULT NULL,
     status        TEXT NOT NULL DEFAULT 'parked' CHECK (status IN ('active', 'parked')),
+    completed_at  TEXT DEFAULT NULL,
+    archived      INTEGER NOT NULL DEFAULT 0,
     timestamp     INTEGER NOT NULL,
     window_title  TEXT DEFAULT NULL,
     process_name  TEXT DEFAULT NULL,
@@ -81,6 +83,7 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_clips_project ON clips(project_id);
   CREATE INDEX IF NOT EXISTS idx_clips_category ON clips(category_id);
   CREATE INDEX IF NOT EXISTS idx_clips_status ON clips(status);
+  CREATE INDEX IF NOT EXISTS idx_clips_archived ON clips(archived);
   CREATE INDEX IF NOT EXISTS idx_clips_timestamp ON clips(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_clips_process ON clips(process_name);
   CREATE INDEX IF NOT EXISTS idx_clip_comments_clip ON clip_comments(clip_id);
@@ -126,12 +129,26 @@ async function init(dbPath) {
       for (const [key, val] of DEFAULT_SETTINGS) ins.run(key, val);
     }
 
+    // Migrations for existing databases
+    runSqliteMigrations();
+
     await refreshCategoryCache();
     console.log(`[Sciurus DB] SQLite ready: ${dbPath}`);
     return true;
   } catch (e) {
     console.error('[Sciurus DB] SQLite init failed:', e.message);
     return false;
+  }
+}
+
+function runSqliteMigrations() {
+  const migrations = [
+    `ALTER TABLE clips ADD COLUMN completed_at TEXT DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
+    `CREATE INDEX IF NOT EXISTS idx_clips_archived ON clips(archived)`,
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); } catch (e) { /* column/index already exists */ }
   }
 }
 
@@ -204,6 +221,8 @@ const CLIPS_BASE_QUERY = `
          c.project_id, p.name AS "projectName",
          c.tags, c.ai_summary AS "aiSummary",
          c.url, c.status, c.timestamp,
+         c.completed_at AS "completedAt",
+         c.archived,
          c.window_title AS "windowTitle",
          c.process_name AS "processName",
          CASE WHEN COUNT(cc.id) = 0 THEN '[]'
@@ -271,7 +290,7 @@ async function saveClip(clip) {
 }
 
 async function updateClip(id, updates) {
-  const ALLOWED = ['category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment'];
+  const ALLOWED = ['category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived'];
   const setClauses = [];
   const params = [];
 
@@ -307,6 +326,12 @@ async function updateClip(id, updates) {
     } else if (key === 'comment') {
       setClauses.push('comment = ?');
       params.push(val);
+    } else if (key === 'completed_at') {
+      setClauses.push('completed_at = ?');
+      params.push(val);
+    } else if (key === 'archived') {
+      setClauses.push('archived = ?');
+      params.push(val ? 1 : 0);
     }
   }
 

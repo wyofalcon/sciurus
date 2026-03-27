@@ -267,6 +267,119 @@ body {
 }
 .badge-active { background: #10b98122; color: var(--accent-green); }
 .badge-parked { background: #64748b22; color: var(--accent-slate); }
+.badge-completed { background: #10b98133; color: var(--accent-green); font-weight: 700; }
+
+/* ── Completed/Archived Clips ── */
+
+.clip-completed {
+  opacity: 0.55;
+  border-left-color: var(--accent-green) !important;
+}
+.clip-completed:hover { opacity: 0.8; }
+.clip-completed .comment,
+.clip-completed .ai-summary,
+.clip-completed .tags { opacity: 0.7; }
+
+.clip-archived {
+  opacity: 0.40;
+  border-left-color: var(--text-dim) !important;
+}
+.clip-archived:hover { opacity: 0.65; }
+
+/* Complete button on clip card */
+.complete-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border-mid);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  padding: 0;
+  line-height: 1;
+}
+.complete-btn:hover {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+  background: #10b98118;
+}
+
+/* ── Complete Dialog Overlay ── */
+
+.complete-dialog-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.complete-dialog {
+  background: var(--bg-card);
+  border: 1px solid var(--border-mid);
+  border-radius: 14px;
+  padding: 24px;
+  min-width: 340px;
+  max-width: 420px;
+  text-align: center;
+}
+
+.complete-dialog h3 {
+  margin-bottom: 6px;
+  font-size: 16px;
+}
+
+.complete-dialog p {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-bottom: 18px;
+}
+
+.complete-dialog-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.complete-dialog-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-mid);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.complete-dialog-btn:hover { border-color: var(--accent-blue); background: var(--bg-hover); }
+.complete-dialog-btn .complete-icon { font-size: 22px; }
+.complete-dialog-btn .complete-label { font-size: 14px; font-weight: 600; }
+.complete-dialog-btn .complete-desc { font-size: 11px; color: var(--text-muted); }
+
+.complete-dialog-btn.keep-btn:hover { border-color: var(--accent-green); }
+.complete-dialog-btn.archive-btn:hover { border-color: var(--accent-amber); }
+
+/* Completed timestamp stamp on clip card */
+.completed-stamp {
+  font-size: 11px;
+  color: var(--accent-green);
+  background: #10b98112;
+  padding: 3px 8px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  display: inline-block;
+}
 
 .cat-badge {
   font-size: 10px;
@@ -295,6 +408,10 @@ body {
   border: 1px solid var(--border-subtle);
   float: left;
   margin-right: 12px;
+}
+.clip img.img-loading {
+  background: var(--bg-card);
+  border: 1px dashed var(--border-subtle);
 }
 .clip img.expanded {
   width: 100%;

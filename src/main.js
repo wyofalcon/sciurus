@@ -3,6 +3,10 @@
 // Clear before requiring electron — inherited from VS Code / Claude Code shell
 delete process.env.ELECTRON_RUN_AS_NODE;
 
+// Suppress EPIPE errors on stdout/stderr (happens when launched via pipe that closes early)
+process.stdout?.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
+process.stderr?.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
+
 const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -46,7 +50,7 @@ const DEFAULT_CATEGORIES = [
 ];
 const ALLOWED_CLIP_FIELDS = [
   'category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment',
-  'window_title', 'process_name',
+  'window_title', 'process_name', 'completed_at', 'archived',
 ];
 
 // Tiny 32x32 fallback icon (transparent PNG) for the system tray
@@ -331,8 +335,8 @@ ipcMain.handle('save-clip', async (_, clip) => {
   await db.saveClip(clip);
   notifyMainWindow('clips-changed');
 
-  // AI categorization as fallback — only if still uncategorized after rules
-  if (clip.category === 'Uncategorized' && clip.comment && ai.isEnabled()) {
+  // AI categorization — runs if still uncategorized OR no project assigned
+  if ((clip.category === 'Uncategorized' || !clip.project_id) && clip.comment && ai.isEnabled()) {
     console.log(`[Sciurus] Starting AI categorization for: "${clip.comment.slice(0, 30)}"`);
     autoCategorize(clip.id, clip.comment, imageData, clip.window_title, clip.process_name);
   }
@@ -362,6 +366,22 @@ ipcMain.handle('delete-clip', async (_, id) => {
 
 ipcMain.handle('assign-clip-to-project', async (_, clipId, projectId) => {
   await db.updateClip(clipId, { project_id: projectId });
+  notifyMainWindow('clips-changed');
+  return true;
+});
+
+ipcMain.handle('complete-clip', async (_, clipId, archive) => {
+  if (typeof clipId !== 'string') return false;
+  const updates = { completed_at: new Date().toISOString() };
+  if (archive) updates.archived = true;
+  await db.updateClip(clipId, updates);
+  notifyMainWindow('clips-changed');
+  return true;
+});
+
+ipcMain.handle('uncomplete-clip', async (_, clipId) => {
+  if (typeof clipId !== 'string') return false;
+  await db.updateClip(clipId, { completed_at: null, archived: false });
   notifyMainWindow('clips-changed');
   return true;
 });
@@ -616,10 +636,7 @@ if (app.isPackaged && process.platform === 'win32') {
 
 /** Launch the main app (called after setup or directly on normal start). */
 async function launchMainApp() {
-  if (!mainWindow) createMainWindow();
-  createTray();
-
-  // Initialize database (waits for Docker PostgreSQL)
+  // Initialize database BEFORE creating the window (renderer calls getClips on load)
   const dbReady = await db.init();
   if (!dbReady) {
     dialog.showErrorBox(
@@ -634,6 +651,9 @@ async function launchMainApp() {
 
   // One-time migration from electron-store
   await migrateIfNeeded();
+
+  if (!mainWindow) createMainWindow();
+  createTray();
 
   // Show the main window
   mainWindow.show();

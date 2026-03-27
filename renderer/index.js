@@ -12,6 +12,7 @@ let appVersion = null;
 // General Notes tab state
 let filterCat = 'All';
 let filterStatus = 'all';
+let showArchived = false;
 let aiMatchedIds = null;
 let searchQuery = '';
 
@@ -117,8 +118,12 @@ function updateStatusBar() {
   const sub = document.getElementById('subtitle');
   if (activeTab === 'general') {
     const generalClips = clips.filter((c) => !c.project_id);
-    const parked = generalClips.filter((c) => c.status === 'parked').length;
-    sub.textContent = `${generalClips.length} general notes` + (parked > 0 ? ` · ${parked} parked` : '');
+    const parked = generalClips.filter((c) => c.status === 'parked' && !c.completedAt).length;
+    const completed = generalClips.filter((c) => c.completedAt).length;
+    let parts = [`${generalClips.length} general notes`];
+    if (parked > 0) parts.push(`${parked} parked`);
+    if (completed > 0) parts.push(`${completed} completed`);
+    sub.textContent = parts.join(' · ');
   } else if (activeTab === 'projects') {
     sub.textContent = `${projects.length} project${projects.length !== 1 ? 's' : ''} · ${clips.length} total clips`;
   } else if (activeTab === 'help') {
@@ -142,11 +147,12 @@ function renderSidebar() {
 
 function renderGeneralSidebar(el) {
   const generalClips = clips.filter((c) => !c.project_id);
+  const visibleClips = showArchived ? generalClips : generalClips.filter((c) => !c.archived);
   const allCats = ['All', ...categories.filter((c) => c !== 'Uncategorized')];
 
   let html = '<div class="sec">Categories</div>';
   allCats.forEach((cat) => {
-    const count = cat === 'All' ? generalClips.length : generalClips.filter((c) => c.category === cat).length;
+    const count = cat === 'All' ? visibleClips.length : visibleClips.filter((c) => c.category === cat).length;
     if (cat !== 'All' && count === 0) return;
     const active = filterCat === cat ? 'active' : '';
     html += `<button class="sb-btn ${active}" onclick="setCat('${escAttr(cat)}')" title="Filter by ${escAttr(cat)}">`
@@ -154,10 +160,14 @@ function renderGeneralSidebar(el) {
   });
 
   html += '<div class="sec">Status</div>';
-  ['all', 'parked', 'active'].forEach((s) => {
+  ['all', 'parked', 'active', 'completed'].forEach((s) => {
     const label = s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1);
     html += `<button class="sb-btn ${filterStatus === s ? 'active' : ''}" onclick="setStatus('${s}')">${label}</button>`;
   });
+
+  html += '<div class="sec" style="margin-top:12px">Archive</div>';
+  html += `<button class="sb-btn ${showArchived ? 'active' : ''}" onclick="toggleArchived()" title="Show or hide archived completed notes">
+    ${showArchived ? '&#x2611; Show Archived' : '&#x2610; Show Archived'}</button>`;
 
   el.innerHTML = html;
 }
@@ -175,6 +185,11 @@ function renderProjectsSidebar(el) {
   });
 
   html += `<button class="sb-btn sb-add" onclick="showNewProjectDialog()">+ New Project</button>`;
+
+  html += '<div class="sec" style="margin-top:12px">Archive</div>';
+  html += `<button class="sb-btn ${showArchived ? 'active' : ''}" onclick="toggleArchived()" title="Show or hide archived completed notes">
+    ${showArchived ? '&#x2611; Show Archived' : '&#x2610; Show Archived'}</button>`;
+
   el.innerHTML = html;
 }
 
@@ -377,12 +392,21 @@ function renderGeneralContent(el) {
   }
 
   el.innerHTML = html;
+  loadDiskImages(el);
 }
 
 function getFilteredGeneral() {
   let filtered = clips.filter((c) => !c.project_id);
+  // Hide archived unless toggled on
+  if (!showArchived) filtered = filtered.filter((c) => !c.archived);
   if (filterCat !== 'All') filtered = filtered.filter((c) => c.category === filterCat);
-  if (filterStatus !== 'all') filtered = filtered.filter((c) => c.status === filterStatus);
+  if (filterStatus !== 'all') {
+    if (filterStatus === 'completed') {
+      filtered = filtered.filter((c) => c.completedAt);
+    } else {
+      filtered = filtered.filter((c) => c.status === filterStatus && !c.completedAt);
+    }
+  }
   if (aiMatchedIds) {
     filtered = filtered.filter((c) => aiMatchedIds.includes(c.id));
   } else if (searchQuery) {
@@ -406,6 +430,11 @@ function setCat(cat) {
 
 function setStatus(status) {
   filterStatus = status;
+  renderAll();
+}
+
+function toggleArchived() {
+  showArchived = !showArchived;
   renderAll();
 }
 
@@ -472,7 +501,8 @@ function renderProjectDetail(el) {
   const proj = projects.find((p) => p.id === selectedProjectId);
   if (!proj) { selectProject(null); return; }
 
-  const projectClips = clips.filter((c) => c.project_id === selectedProjectId);
+  let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
+  if (!showArchived) projectClips = projectClips.filter((c) => !c.archived);
 
   let html = `<div class="project-detail-header">
     <div>
@@ -506,6 +536,7 @@ function renderProjectDetail(el) {
   }
 
   el.innerHTML = html;
+  loadDiskImages(el);
 }
 
 function searchProject() {
@@ -518,6 +549,7 @@ function searchProject() {
   if (!proj) return;
 
   let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
+  if (!showArchived) projectClips = projectClips.filter((c) => !c.archived);
   if (q) {
     projectClips = projectClips.filter((c) =>
       (c.comment || '').toLowerCase().includes(q) ||
@@ -541,6 +573,7 @@ function searchProject() {
   const wrapper = document.createElement('div');
   wrapper.innerHTML = clipListHtml;
   while (wrapper.firstChild) el.appendChild(wrapper.firstChild);
+  loadDiskImages(el);
 }
 
 function selectProject(id) {
@@ -970,15 +1003,23 @@ async function addCustomBlock() {
 function renderClipCard(c, inProject) {
   const id = escAttr(c.id);
   const isActive = c.status === 'active';
+  const isCompleted = !!c.completedAt;
+  const isArchived = !!c.archived;
   const statusClass = isActive ? 'badge-active' : 'badge-parked';
   const statusLabel = isActive ? 'ACTIVE' : 'PARKED';
 
-  let html = `<div class="clip">`;
+  let html = `<div class="clip${isCompleted ? ' clip-completed' : ''}${isArchived ? ' clip-archived' : ''}" data-testid="clip-card-${id}">`;
 
   // Header row
   html += `<div class="clip-hdr">`;
   html += `<div class="clip-meta">`;
-  html += `<span class="badge ${statusClass}" onclick="toggleStatus('${id}')" title="Click to toggle between Active and Parked">${statusLabel}</span>`;
+
+  if (isCompleted) {
+    html += `<span class="badge badge-completed" onclick="uncompleteClip('${id}')" title="Click to mark as incomplete">&#x2713; DONE</span>`;
+  } else {
+    html += `<span class="badge ${statusClass}" onclick="toggleStatus('${id}')" title="Click to toggle between Active and Parked">${statusLabel}</span>`;
+  }
+
   html += `<span class="cat-badge" title="Category — assigned by AI or manually">${esc(c.category)}</span>`;
   if (c.projectName && !inProject) {
     html += `<span class="proj-badge" style="border-color:${esc(c.projectColor || '#3b82f6')}">${esc(c.projectName)}</span>`;
@@ -986,6 +1027,11 @@ function renderClipCard(c, inProject) {
   html += `</div>`;
   html += `<div class="clip-actions">`;
   html += `<span class="clip-time">${timeAgo(c.timestamp)}</span>`;
+
+  // Complete button (only if not already complete)
+  if (!isCompleted) {
+    html += `<button class="complete-btn" onclick="showCompleteDialog('${id}')" title="Mark as complete" data-testid="clip-complete-btn">&#x2713;</button>`;
+  }
 
   // Move to project dropdown
   if (!inProject && projects.length > 0) {
@@ -1004,7 +1050,9 @@ function renderClipCard(c, inProject) {
   html += `</div></div>`;
 
   // Screenshot
-  if (c.image) {
+  if (c.image === '__on_disk__') {
+    html += `<img data-clip-id="${id}" class="img-loading" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse screenshot" />`;
+  } else if (c.image) {
     html += `<img src="${esc(c.image)}" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse screenshot" />`;
   }
 
@@ -1013,6 +1061,11 @@ function renderClipCard(c, inProject) {
 
   // AI summary
   if (c.aiSummary) html += `<div class="ai-summary" title="AI-generated summary">${esc(c.aiSummary)}</div>`;
+
+  // Completed timestamp
+  if (isCompleted) {
+    html += `<div class="completed-stamp" title="Completed at ${esc(c.completedAt)}">&#x2713; Completed ${timeAgo(new Date(c.completedAt).getTime())}${isArchived ? ' · Archived' : ''}</div>`;
+  }
 
   // Tags
   if (c.tags && c.tags.length) {
@@ -1038,6 +1091,19 @@ function renderClipCard(c, inProject) {
   return html;
 }
 
+// ── Lazy-load images stored on disk ──
+
+async function loadDiskImages(container) {
+  const imgs = container.querySelectorAll('img[data-clip-id]');
+  for (const img of imgs) {
+    const dataUrl = await window.quickclip.getClipImage(img.dataset.clipId);
+    if (dataUrl) {
+      img.src = dataUrl;
+      img.classList.remove('img-loading');
+    }
+  }
+}
+
 // ── Clip Actions ──
 
 async function toggleStatus(id) {
@@ -1046,6 +1112,51 @@ async function toggleStatus(id) {
   const newStatus = clip.status === 'active' ? 'parked' : 'active';
   await window.quickclip.updateClip(id, { status: newStatus });
   clip.status = newStatus;
+  renderAll();
+}
+
+function showCompleteDialog(id) {
+  // Remove any existing dialog
+  const existing = document.getElementById('completeDialog');
+  if (existing) existing.remove();
+
+  const dialog = document.createElement('div');
+  dialog.id = 'completeDialog';
+  dialog.className = 'complete-dialog-overlay';
+  dialog.setAttribute('data-testid', 'complete-dialog');
+  dialog.innerHTML = `
+    <div class="complete-dialog">
+      <h3>Mark as Complete</h3>
+      <p>What would you like to do with this note?</p>
+      <div class="complete-dialog-actions">
+        <button class="complete-dialog-btn keep-btn" onclick="completeClip('${escAttr(id)}', false)" data-testid="complete-keep-btn">
+          <span class="complete-icon">&#x1F4CC;</span>
+          <span class="complete-label">Keep Here</span>
+          <span class="complete-desc">Stays visible, dimmed</span>
+        </button>
+        <button class="complete-dialog-btn archive-btn" onclick="completeClip('${escAttr(id)}', true)" data-testid="complete-archive-btn">
+          <span class="complete-icon">&#x1F4E6;</span>
+          <span class="complete-label">Archive</span>
+          <span class="complete-desc">Hidden from default view</span>
+        </button>
+      </div>
+      <button class="cancel-btn" onclick="document.getElementById('completeDialog').remove()">Cancel</button>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+}
+
+async function completeClip(id, archive) {
+  const dialog = document.getElementById('completeDialog');
+  if (dialog) dialog.remove();
+  await window.quickclip.completeClip(id, archive);
+  clips = await window.quickclip.getClips();
+  renderAll();
+}
+
+async function uncompleteClip(id) {
+  await window.quickclip.uncompleteClip(id);
+  clips = await window.quickclip.getClips();
   renderAll();
 }
 

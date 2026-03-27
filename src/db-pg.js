@@ -76,6 +76,9 @@ async function runMigrations() {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_clips_process ON clips(process_name)`,
     `CREATE INDEX IF NOT EXISTS idx_window_rules_priority ON window_rules(priority DESC)`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`,
+    `CREATE INDEX IF NOT EXISTS idx_clips_archived ON clips(archived)`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }
@@ -146,6 +149,8 @@ const CLIPS_BASE_QUERY = `
          c.project_id, p.name AS "projectName",
          c.tags, c.ai_summary AS "aiSummary",
          c.url, c.status, c.timestamp,
+         c.completed_at AS "completedAt",
+         c.archived,
          c.window_title AS "windowTitle",
          c.process_name AS "processName",
          COALESCE(
@@ -225,7 +230,7 @@ async function saveClip(clip) {
 }
 
 async function updateClip(id, updates) {
-  const ALLOWED = ['category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment'];
+  const ALLOWED = ['category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived'];
   const setClauses = [];
   const params = [];
   let paramIdx = 1;
@@ -267,6 +272,12 @@ async function updateClip(id, updates) {
     } else if (key === 'comment') {
       setClauses.push(`comment = $${paramIdx++}`);
       params.push(val);
+    } else if (key === 'completed_at') {
+      setClauses.push(`completed_at = $${paramIdx++}`);
+      params.push(val);
+    } else if (key === 'archived') {
+      setClauses.push(`archived = $${paramIdx++}`);
+      params.push(!!val);
     }
   }
 

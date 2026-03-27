@@ -2,10 +2,11 @@
   "name": "sciurus",
   "version": "2.0.0",
   "description": "Sciurus! — ADHD-friendly knowledge capture. Screenshot, note, done. AI handles the rest.",
+  "author": "wyofalcon@gmail.com",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "cross-env SCIURUS_DEV=1 electron .",
+    "start": "node scripts/launch.js",
+    "dev": "node scripts/launch.js --dev",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",

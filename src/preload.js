@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('quickclip', {
   deleteClip: (id) => ipcRenderer.invoke('delete-clip', id),
   getClipImage: (clipId) => ipcRenderer.invoke('get-clip-image', clipId),
   assignClipToProject: (clipId, projectId) => ipcRenderer.invoke('assign-clip-to-project', clipId, projectId),
+  completeClip: (clipId, archive) => ipcRenderer.invoke('complete-clip', clipId, archive),
+  uncompleteClip: (clipId) => ipcRenderer.invoke('uncomplete-clip', clipId),
 
   // Categories
   getCategories: () => ipcRenderer.invoke('get-categories'),
