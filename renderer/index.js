@@ -43,27 +43,33 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') window.quickclip.hideMain();
 });
 
-window.quickclip.onClipsChanged(async () => {
-  clips = await window.quickclip.getClips();
-  if (activeTab === 'general' || activeTab === 'projects') renderContent();
-  updateStatusBar();
-});
+// Debounced reload to prevent race conditions when clips-changed and
+// projects-changed fire back-to-back (e.g. AI assigns clip to project).
+let _reloadTimer = null;
+function scheduleReload() {
+  if (_reloadTimer) clearTimeout(_reloadTimer);
+  _reloadTimer = setTimeout(async () => {
+    _reloadTimer = null;
+    await loadData();
+    renderAll();
+  }, 80);
+}
 
-window.quickclip.onProjectsChanged(async () => {
-  projects = await window.quickclip.getProjects();
-  if (activeTab === 'projects') renderAll();
-});
+window.quickclip.onClipsChanged(() => scheduleReload());
+window.quickclip.onProjectsChanged(() => scheduleReload());
 
 // ── Escaping ──
 
 function esc(s) {
   if (!s) return '';
+  if (typeof s !== 'string') s = String(s);
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
           .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function escAttr(s) {
   if (!s) return '';
+  if (typeof s !== 'string') s = String(s);
   return s.replace(/&/g, '&amp;').replace(/'/g, '&#39;')
           .replace(/</g, '&lt;').replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;').replace(/\\/g, '\\\\');
@@ -532,7 +538,11 @@ function renderProjectDetail(el) {
       <div class="empty-title">No clips in this project</div>
       <div class="empty-sub">Assign clips from General Notes or capture new ones</div></div>`;
   } else {
-    html += projectClips.map((c) => renderClipCard(c, true)).join('');
+    try {
+      html += projectClips.map((c) => renderClipCard(c, true)).join('');
+    } catch (e) {
+      html += `<div class="empty"><div class="empty-title">Render error: ${e.message}</div></div>`;
+    }
   }
 
   el.innerHTML = html;

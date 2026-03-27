@@ -321,7 +321,7 @@ async function deleteComment(commentId) {
 async function getProjects() {
   const { rows } = await pool.query(`
     SELECT p.*,
-           (SELECT COUNT(*) FROM clips WHERE project_id = p.id) AS "clipCount"
+           (SELECT COUNT(*) FROM clips WHERE project_id = p.id)::int AS "clipCount"
     FROM projects p
     ORDER BY p.name
   `);

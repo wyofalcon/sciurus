@@ -145,6 +145,7 @@ function createMainWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  if (process.env.SCIURUS_DEV === '1') mainWindow.webContents.openDevTools();
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
@@ -361,12 +362,14 @@ ipcMain.handle('delete-clip', async (_, id) => {
   images.deleteImage(id);
   await db.deleteClip(id);
   notifyMainWindow('clips-changed');
+  notifyMainWindow('projects-changed');
   return true;
 });
 
 ipcMain.handle('assign-clip-to-project', async (_, clipId, projectId) => {
   await db.updateClip(clipId, { project_id: projectId });
   notifyMainWindow('clips-changed');
+  notifyMainWindow('projects-changed');
   return true;
 });
 
