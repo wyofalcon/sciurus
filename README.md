@@ -40,6 +40,8 @@ to context-switch between your app, your terminal, and a notes doc.
 - **Gemini vision AI** — analyzes screenshots + notes for smart categorization (optional)
 - **Markup color semantics** — red = bug, green = approved, pink = question (AI reads your annotations)
 - **AI search** — natural language search across all clips
+- **1-click project summarization** — generates actionable AI fix prompts for all project notes in a side-by-side panel with copy-all
+- **Complete/Archive system** — mark notes as done (keep visible or archive), with undo
 - **Dual database backend** — PostgreSQL (Docker) for power users, SQLite (built-in) for zero-setup
 - **Disk-based image storage** — screenshots saved to filesystem, not bloating the database
 - **Project organization** — group clips by project with dedicated views
@@ -50,103 +52,220 @@ to context-switch between your app, your terminal, and a notes doc.
 - **Settings panel** — configure capture, AI, and app behavior in-app
 - **Cross-platform** — Windows and Linux (AppImage, deb)
 
+---
+
+## Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| **Node.js** | 18+ (22 recommended) | [nodejs.org](https://nodejs.org) or use `nvm` / `fnm` |
+| **npm** | 9+ | Comes with Node.js |
+| **Git** | 2.x | [git-scm.com](https://git-scm.com) |
+| **Docker** | 20+ (optional) | Only needed for PostgreSQL backend |
+| **Python** | 3.x (optional) | Required by `node-gyp` for native module compilation on some systems |
+
+### Platform-specific requirements
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+- **Build tools** — needed to compile `better-sqlite3` (native module):
+  ```powershell
+  # Option A: Visual Studio Build Tools (recommended)
+  winget install Microsoft.VisualStudio.2022.BuildTools
+
+  # Option B: Via npm (installs automatically)
+  npm install --global windows-build-tools
+  ```
+- **PowerShell** — pre-installed. Used for active window capture (Win32 API via P/Invoke). No configuration needed.
+- **Docker Desktop** — install from [docker.com](https://www.docker.com/products/docker-desktop/) if using PostgreSQL.
+
+</details>
+
+<details>
+<summary><strong>Linux (Ubuntu/Debian)</strong></summary>
+
+- **Build tools** — needed to compile native modules:
+  ```bash
+  sudo apt update
+  sudo apt install build-essential python3 libsqlite3-dev
+  ```
+- **Window metadata capture** — for auto-categorization by active window:
+  ```bash
+  # X11 / WSLg (recommended)
+  sudo apt install xdotool
+
+  # Wayland + GNOME — works automatically via gdbus (no extra install)
+  ```
+  Without `xdotool`, the app still works — you just won't get automatic project matching from window titles.
+- **Docker Engine** — install from [docs.docker.com](https://docs.docker.com/engine/install/) if using PostgreSQL.
+
+</details>
+
+<details>
+<summary><strong>macOS</strong></summary>
+
+- **Xcode Command Line Tools** — needed for native module compilation:
+  ```bash
+  xcode-select --install
+  ```
+- **Docker Desktop** — install from [docker.com](https://www.docker.com/products/docker-desktop/) if using PostgreSQL.
+- **Note:** Window metadata capture is not yet implemented on macOS. The app works fully, but auto-categorization by window title is unavailable.
+
+</details>
+
+---
+
 ## Setup
 
 ### Quick start (new users)
 
-Just run the app — the **setup wizard** walks you through everything:
-
 ```bash
+git clone https://github.com/wyofalcon/sciurus.git
+cd sciurus
 npm install
 npm start
 ```
 
-The wizard will:
+The **setup wizard** launches automatically on first run and walks you through:
 1. Detect Docker or offer the built-in SQLite database (no Docker needed)
 2. Help you set up AI (optional — free Gemini API key or GCP Vertex AI)
 3. Launch the app
 
-### Linux requirements
-
-For window metadata capture (auto-categorization by active window):
+### Development mode
 
 ```bash
-# X11 / WSLg (recommended)
-sudo apt install xdotool
-
-# Wayland + GNOME — works automatically via gdbus (no extra install)
+npm run dev
 ```
 
-Without xdotool, the app still works — you just won't get automatic project matching from window titles.
+This sets `SCIURUS_DEV=1`, which auto-opens DevTools on launch.
 
-### Manual setup (power users)
+---
 
-#### Database
+## Database Setup
 
-**Option A: SQLite (zero setup)**
-Set `DB_BACKEND=sqlite` in `.env` or just skip Docker — the app falls back automatically.
+### Option A: SQLite (zero setup)
 
-**Option B: PostgreSQL (Docker)**
+No Docker, no config. Set in `.env` or just skip Docker — the app falls back automatically:
+
+```bash
+DB_BACKEND=sqlite
+```
+
+The database file is stored at `{userData}/sciurus.db`:
+- **Windows:** `%APPDATA%/sciurus/sciurus.db`
+- **Linux:** `~/.config/sciurus/sciurus.db`
+- **macOS:** `~/Library/Application Support/sciurus/sciurus.db`
+
+### Option B: PostgreSQL (Docker)
+
 ```bash
 docker compose up -d
 ```
-This starts PostgreSQL 16 (`sciurus-db`) on port 5433. Data persists in a Docker volume.
 
-#### AI (optional)
+This starts PostgreSQL 16 Alpine (`sciurus-db`) on **port 5433** (not the default 5432, to avoid conflicts). Data persists in a Docker volume.
 
-**Option A: Gemini API Key (recommended, free tier)**
-1. Go to https://aistudio.google.com/apikey
-2. Create an API key
-3. Add to `.env`: `GEMINI_API_KEY=AIzaSy...`
+Default connection (no `.env` changes needed):
+| Setting | Value |
+|---|---|
+| Host | `localhost` |
+| Port | `5433` |
+| Database | `sciurus` |
+| User | `sciurus` |
+| Password | `sciurus_dev` |
 
-**Option B: Vertex AI (GCP billing)**
-1. Enable the Vertex AI API on your GCP project
-2. Create a Service Account, download the JSON key
-3. Save as `credentials.json` in the project root
-4. Add to `.env`: `AI_AUTH_MODE=vertex`
+To use a custom password:
+```bash
+# In .env or as an environment variable before starting Docker
+POSTGRES_PASSWORD=your_secure_password
+```
+
+The `docker/init.sql` script runs automatically on first container start and creates all tables, indexes, triggers, and seed data.
+
+---
+
+## AI Setup (Optional)
 
 AI features are optional. The rule engine handles most categorization without AI.
 
-### Environment variables
+### Option A: Gemini API Key (recommended — free tier)
+
+1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
+2. Create an API key
+3. Add to `.env`:
+   ```bash
+   AI_AUTH_MODE=apikey
+   GEMINI_API_KEY=AIzaSy...
+   ```
+
+### Option B: Vertex AI (GCP service account)
+
+1. Enable the Vertex AI API on your GCP project
+2. Create a Service Account with the "Vertex AI User" role
+3. Download the JSON key and save as `credentials.json` in the project root
+4. Add to `.env`:
+   ```bash
+   AI_AUTH_MODE=vertex
+   ```
+
+The app uses native JWT auth for Vertex AI — no heavy Google SDK dependencies.
+
+---
+
+## Environment Variables
+
+Copy the example file and customize:
 
 ```bash
-# Database: pg, sqlite, or auto (tries pg then sqlite)
-DB_BACKEND=pg
-
-# PostgreSQL connection (when using Docker)
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5433
-POSTGRES_DB=sciurus
-POSTGRES_USER=sciurus
-POSTGRES_PASSWORD=sciurus_dev
-
-# AI auth mode: apikey, vertex, or auto
-AI_AUTH_MODE=apikey
-GEMINI_API_KEY=your-key-here
-
-# Hotkey
-HOTKEY_COMBO=ctrl+shift+q
+cp .env.example .env
 ```
+
+| Variable | Default | Description |
+|---|---|---|
+| `DB_BACKEND` | `auto` | `pg`, `sqlite`, or `auto` (tries pg then sqlite) |
+| `POSTGRES_HOST` | `localhost` | PostgreSQL host |
+| `POSTGRES_PORT` | `5433` | PostgreSQL port |
+| `POSTGRES_DB` | `sciurus` | PostgreSQL database name |
+| `POSTGRES_USER` | `sciurus` | PostgreSQL user |
+| `POSTGRES_PASSWORD` | `sciurus_dev` | PostgreSQL password |
+| `AI_AUTH_MODE` | `auto` | `apikey`, `vertex`, or `auto` |
+| `GEMINI_API_KEY` | — | Gemini API key (for `apikey` mode) |
+| `HOTKEY_COMBO` | `ctrl+shift+q` | Global hotkey for capture |
+| `SCIURUS_DEV` | — | Set to `1` to open DevTools on launch |
+
+---
 
 ## Building
 
+### Windows installer (.exe)
+
 ```bash
-# Windows installer (.exe)
 npm run build:win
+```
 
-# Linux (AppImage + .deb)
+### Linux (AppImage + .deb)
+
+```bash
 npm run build:linux
+```
 
-# Both platforms
+### Both platforms
+
+```bash
 npm run build
 ```
 
-## Tip: One-Button Capture
+### Pack without installer (for testing)
 
-Sciurus works best when capturing is effortless — one press, no thinking.
-Map `Ctrl+Shift+Q` to a spare mouse button or macro key so you can stash
-a thought without breaking flow. Works great with PowerToys Zoom Draw
-for annotating screenshots with colored markers before capture.
+```bash
+npm run pack
+```
+
+Build output goes to `dist/`.
+
+> **Note:** You must build on the target platform. Cross-compilation is not supported due to native modules (`better-sqlite3`).
+
+---
 
 ## Categorization Priority Chain
 
@@ -159,39 +278,124 @@ When you save a clip, Sciurus tries to categorize it in this order:
 
 Most clips get categorized instantly by rules 2-3, no AI call needed.
 
+---
+
 ## Project Structure
 
 ```
 sciurus/
 ├── src/
 │   ├── main.js          # Electron main process — tray, hotkey, IPC, capture flow
+│   ├── preload.js       # Context bridge for renderer (contextIsolation: true)
 │   ├── db.js            # Database switcher (PostgreSQL or SQLite)
 │   ├── db-pg.js         # PostgreSQL backend (pg)
 │   ├── db-sqlite.js     # SQLite backend (better-sqlite3)
-│   ├── ai.js            # Gemini AI via API key or Vertex AI (native JWT auth)
+│   ├── ai.js            # Gemini AI — categorize, search, summarize (native JWT auth)
 │   ├── rules.js         # Rule-based categorization engine with in-memory cache
 │   ├── window-info.js   # Cross-platform active window capture (Win32/xdotool/gdbus)
-│   ├── images.js        # Disk-based image storage + AI compression
-│   └── preload.js       # Context bridge for renderer
+│   └── images.js        # Disk-based image storage + AI compression
 ├── renderer/
-│   ├── index.html/js/css   # Main window — tabbed notes viewer
-│   ├── capture.html/js/css # Capture popup
+│   ├── index.html/js/css   # Main window — tabbed notes viewer, project summaries
+│   ├── capture.html/js/css # Capture popup — screenshot preview + note input
 │   └── setup.html/js/css   # First-run setup wizard
 ├── scripts/
-│   └── get-window.ps1   # Windows PowerShell window info script
+│   ├── launch.js        # Electron launcher (fixes ELECTRON_RUN_AS_NODE in VS Code shells)
+│   └── get-window.ps1   # Windows PowerShell window info script (auto-generated)
 ├── docker/
-│   └── init.sql         # PostgreSQL schema + seed data
-├── docker-compose.yml   # PostgreSQL 16 container
-├── .env                 # Config (git-ignored)
-├── credentials.json     # Google service account (git-ignored)
+│   └── init.sql         # PostgreSQL schema, indexes, triggers, seed data
+├── assets/              # App icons (icon.ico, icon.png)
+├── docker-compose.yml   # PostgreSQL 16 Alpine container
+├── .env.example         # Example environment config
+├── .env                 # Your config (git-ignored)
+├── credentials.json     # Google service account key (git-ignored)
 └── package.json
 ```
 
 ## Architecture
 
-- **Storage**: PostgreSQL 16 (Docker) or SQLite (built-in) — auto-detected
-- **Images**: Saved to disk (`{userData}/images/`), compressed to JPEG before AI calls
-- **AI**: Gemini 2.5 Flash via API key or Vertex AI — with native JWT auth (no heavy SDKs)
-- **Rules**: Window title + process name matching with 5-minute cache, regex support
-- **Frontend**: Electron with context-isolated renderers
-- **Platforms**: Windows (NSIS installer), Linux (AppImage, deb)
+| Layer | Technology | Notes |
+|---|---|---|
+| **Runtime** | Electron 33 | Context-isolated renderers, no `nodeIntegration` |
+| **Database** | PostgreSQL 16 or SQLite | Auto-detected; migrations run on startup |
+| **Image Storage** | Filesystem | `{userData}/images/{clipId}.png`; compressed to JPEG for AI calls |
+| **AI** | Gemini 2.5 Flash | API key or Vertex AI with native JWT (zero SDK deps) |
+| **Rules** | In-memory | Window title + process name matching, regex support, 5-min cache |
+| **Window Info** | OS-native | Win32 P/Invoke, xdotool (X11), gdbus (Wayland+GNOME) |
+| **Build** | electron-builder | NSIS (Windows), AppImage + deb (Linux) |
+
+---
+
+## Troubleshooting
+
+### `npm install` fails on `better-sqlite3`
+
+This is a native module that needs C++ compilation:
+- **Windows:** Install Visual Studio Build Tools (`winget install Microsoft.VisualStudio.2022.BuildTools`)
+- **Linux:** Run `sudo apt install build-essential python3`
+- **macOS:** Run `xcode-select --install`
+
+Then retry `npm install`.
+
+### App launches as plain Node.js (no window)
+
+VS Code and Claude Code terminals set `ELECTRON_RUN_AS_NODE=1`. The launch script (`scripts/launch.js`) automatically unsets this, but if you're running Electron directly:
+
+```bash
+# Use the launch script instead
+npm start
+
+# Or unset manually
+unset ELECTRON_RUN_AS_NODE && npx electron .
+```
+
+### Docker database won't connect
+
+```bash
+# Check if the container is running
+docker ps --filter name=sciurus-db
+
+# Check health
+docker inspect sciurus-db --format "{{.State.Health.Status}}"
+
+# View logs
+docker logs sciurus-db
+
+# Restart
+docker compose down && docker compose up -d
+```
+
+Default port is **5433** (not 5432). Check your `.env` matches.
+
+### Window capture not working (Linux)
+
+```bash
+# Install xdotool for X11 / WSLg
+sudo apt install xdotool
+
+# Verify it works
+xdotool getactivewindow getwindowname
+```
+
+On Wayland + GNOME, `gdbus` is used automatically. Other Wayland compositors are not yet supported.
+
+### AI not categorizing
+
+1. Check that credentials are configured: look for `[AI] Gemini API key ready` or `[AI] Vertex AI ready` in the terminal
+2. Verify `.env` has `AI_AUTH_MODE` and either `GEMINI_API_KEY` or `credentials.json`
+3. The AI bar in the main window shows categorization status
+4. AI is optional — the rule engine and manual categorization work without it
+
+---
+
+## Tip: One-Button Capture
+
+Sciurus works best when capturing is effortless — one press, no thinking.
+Map `Ctrl+Shift+Q` to a spare mouse button or macro key so you can stash
+a thought without breaking flow. Works great with PowerToys Zoom Draw
+for annotating screenshots with colored markers before capture.
+
+---
+
+## License
+
+Private project. All rights reserved.
