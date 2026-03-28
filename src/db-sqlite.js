@@ -52,6 +52,8 @@ const SCHEMA = `
     status        TEXT NOT NULL DEFAULT 'parked' CHECK (status IN ('active', 'parked')),
     completed_at  TEXT DEFAULT NULL,
     archived      INTEGER NOT NULL DEFAULT 0,
+    ai_fix_prompt TEXT DEFAULT NULL,
+    deleted_at    TEXT DEFAULT NULL,
     timestamp     INTEGER NOT NULL,
     window_title  TEXT DEFAULT NULL,
     process_name  TEXT DEFAULT NULL,
@@ -147,6 +149,8 @@ function runSqliteMigrations() {
     `ALTER TABLE clips ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
     `CREATE INDEX IF NOT EXISTS idx_clips_archived ON clips(archived)`,
     `ALTER TABLE clips ADD COLUMN ai_fix_prompt TEXT DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN deleted_at TEXT DEFAULT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column/index already exists */ }
@@ -227,6 +231,7 @@ const CLIPS_BASE_QUERY = `
          c.archived,
          c.window_title AS "windowTitle",
          c.process_name AS "processName",
+         c.deleted_at AS "deletedAt",
          CASE WHEN COUNT(cc.id) = 0 THEN '[]'
               ELSE json_group_array(json_object('text', cc.text, 'ts', cc.ts))
          END AS comments
@@ -251,11 +256,11 @@ function parseClipRow(row) {
 async function getClips(projectId) {
   let rows;
   if (projectId === undefined) {
-    rows = db.prepare(CLIPS_BASE_QUERY + CLIPS_GROUP).all();
+    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NULL ' + CLIPS_GROUP).all();
   } else if (projectId === null) {
-    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL ' + CLIPS_GROUP).all();
+    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL AND c.deleted_at IS NULL ' + CLIPS_GROUP).all();
   } else {
-    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id = ? ' + CLIPS_GROUP).all(projectId);
+    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id = ? AND c.deleted_at IS NULL ' + CLIPS_GROUP).all(projectId);
   }
   return rows.map(parseClipRow);
 }
@@ -348,8 +353,30 @@ async function updateClip(id, updates) {
 }
 
 async function deleteClip(id) {
+  db.prepare('UPDATE clips SET deleted_at = datetime(\'now\') WHERE id = ?').run(id);
+  return true;
+}
+
+async function restoreClip(id) {
+  db.prepare('UPDATE clips SET deleted_at = NULL WHERE id = ?').run(id);
+  return true;
+}
+
+async function permanentDeleteClip(id) {
   db.prepare('DELETE FROM clips WHERE id = ?').run(id);
   return true;
+}
+
+async function getTrash() {
+  const rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NOT NULL ' + CLIPS_GROUP).all();
+  return rows.map(parseClipRow);
+}
+
+async function purgeTrash(olderThanDays = 30) {
+  const result = db.prepare(
+    `DELETE FROM clips WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-' || ? || ' days')`
+  ).run(olderThanDays);
+  return result.changes;
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +543,10 @@ module.exports = {
   saveClip,
   updateClip,
   deleteClip,
+  restoreClip,
+  permanentDeleteClip,
+  getTrash,
+  purgeTrash,
   getCategories,
   getCategoryId,
   getCategoryName,

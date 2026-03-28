@@ -80,6 +80,8 @@ async function runMigrations() {
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`,
     `CREATE INDEX IF NOT EXISTS idx_clips_archived ON clips(archived)`,
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS ai_fix_prompt TEXT DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }
@@ -155,6 +157,7 @@ const CLIPS_BASE_QUERY = `
          c.archived,
          c.window_title AS "windowTitle",
          c.process_name AS "processName",
+         c.deleted_at AS "deletedAt",
          COALESCE(
            json_agg(
              json_build_object('text', cc.text, 'ts', cc.ts)
@@ -176,15 +179,15 @@ const CLIPS_GROUP = `
 async function getClips(projectId) {
   let query, params;
   if (projectId === undefined) {
-    // All clips
-    query = CLIPS_BASE_QUERY + CLIPS_GROUP;
+    // All clips (exclude deleted)
+    query = CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NULL ' + CLIPS_GROUP;
     params = [];
   } else if (projectId === null) {
-    // General notes (no project)
-    query = CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL ' + CLIPS_GROUP;
+    // General notes (no project, exclude deleted)
+    query = CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL AND c.deleted_at IS NULL ' + CLIPS_GROUP;
     params = [];
   } else {
-    query = CLIPS_BASE_QUERY + ' WHERE c.project_id = $1 ' + CLIPS_GROUP;
+    query = CLIPS_BASE_QUERY + ' WHERE c.project_id = $1 AND c.deleted_at IS NULL ' + CLIPS_GROUP;
     params = [projectId];
   }
   const { rows } = await pool.query(query, params);
@@ -298,8 +301,33 @@ async function updateClip(id, updates) {
 }
 
 async function deleteClip(id) {
+  await pool.query('UPDATE clips SET deleted_at = NOW() WHERE id = $1', [id]);
+  return true;
+}
+
+async function restoreClip(id) {
+  await pool.query('UPDATE clips SET deleted_at = NULL WHERE id = $1', [id]);
+  return true;
+}
+
+async function permanentDeleteClip(id) {
   await pool.query('DELETE FROM clips WHERE id = $1', [id]);
   return true;
+}
+
+async function getTrash() {
+  const { rows } = await pool.query(
+    CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NOT NULL ' + CLIPS_GROUP
+  );
+  return rows;
+}
+
+async function purgeTrash(olderThanDays = 30) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM clips WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '1 day' * $1`,
+    [olderThanDays]
+  );
+  return rowCount;
 }
 
 // ---------------------------------------------------------------------------
@@ -513,6 +541,10 @@ module.exports = {
   saveClip,
   updateClip,
   deleteClip,
+  restoreClip,
+  permanentDeleteClip,
+  getTrash,
+  purgeTrash,
   // Categories
   getCategories,
   getCategoryId,

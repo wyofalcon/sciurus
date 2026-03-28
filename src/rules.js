@@ -81,6 +81,8 @@ const PROCESS_CATEGORY_MAP = {
 // Scans window title for keywords that strongly indicate a category.
 
 const TITLE_KEYWORD_MAP = [
+  // Project-specific sites (check first — most specific)
+  { keywords: ['cvstomize', 'cvstomize.com'], category: 'cvstomize.com' },
   // Dev
   { keywords: ['github.com', 'gitlab.com', 'bitbucket.org'], category: 'Code Patterns' },
   { keywords: ['stack overflow', 'stackoverflow.com'], category: 'Code Patterns' },
@@ -231,22 +233,22 @@ async function categorize(windowTitle, processName, comment) {
     category = await db.getCategoryName(ruleResult.categoryId);
   }
 
-  // 3. Match category by process name (e.g., "code" → Dev Tools)
-  if (!category) {
-    const processCat = matchByProcess(processName);
-    if (processCat) category = await ensureCategoryExists(processCat);
-  }
-
-  // 4. Match category by title keywords (e.g., "github.com" → Code Patterns)
+  // 3. Match category by title keywords FIRST (most specific — e.g., "cvstomize.com")
   if (!category) {
     const titleCat = matchByTitleKeywords(windowTitle);
     if (titleCat) category = await ensureCategoryExists(titleCat);
   }
 
-  // 5. Match category by comment keywords (e.g., "bug" → Troubleshooting)
+  // 4. Match category by comment keywords (e.g., "bug" → Troubleshooting)
   if (!category) {
     const commentCat = matchByComment(comment);
     if (commentCat) category = await ensureCategoryExists(commentCat);
+  }
+
+  // 5. Match category by process name LAST (broadest — e.g., "chrome" → Web)
+  if (!category) {
+    const processCat = matchByProcess(processName);
+    if (processCat) category = await ensureCategoryExists(processCat);
   }
 
   return {

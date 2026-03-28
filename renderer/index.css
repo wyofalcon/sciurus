@@ -1052,3 +1052,12 @@ kbd {
   color: var(--text-dim);
   font-style: italic;
 }
+
+/* ── Trash view ── */
+.trash-clip {
+  opacity: 0.75;
+  border-left: 3px solid var(--danger);
+}
+.trash-clip:hover {
+  opacity: 1;
+}

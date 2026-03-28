@@ -59,6 +59,8 @@ CREATE TABLE clips (
     status      VARCHAR(10) NOT NULL DEFAULT 'parked' CHECK (status IN ('active', 'parked')),
     completed_at TIMESTAMPTZ DEFAULT NULL,
     archived    BOOLEAN NOT NULL DEFAULT FALSE,
+    ai_fix_prompt TEXT DEFAULT NULL,
+    deleted_at  TIMESTAMPTZ DEFAULT NULL,
     timestamp   BIGINT NOT NULL,
     window_title  TEXT DEFAULT NULL,
     process_name  VARCHAR(255) DEFAULT NULL,
@@ -80,6 +82,7 @@ CREATE INDEX idx_clips_project     ON clips(project_id);
 CREATE INDEX idx_clips_category    ON clips(category_id);
 CREATE INDEX idx_clips_status      ON clips(status);
 CREATE INDEX idx_clips_archived    ON clips(archived);
+CREATE INDEX idx_clips_deleted     ON clips(deleted_at);
 CREATE INDEX idx_clips_timestamp   ON clips(timestamp DESC);
 CREATE INDEX idx_clips_tags        ON clips USING GIN(tags);
 CREATE INDEX idx_clip_comments_clip ON clip_comments(clip_id);

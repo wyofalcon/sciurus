@@ -13,6 +13,8 @@ let appVersion = null;
 let filterCat = 'All';
 let filterStatus = 'all';
 let showArchived = false;
+let showTrash = false;
+let trashClips = [];
 let aiMatchedIds = null;
 let searchQuery = '';
 
@@ -132,6 +134,8 @@ function updateStatusBar() {
     sub.textContent = parts.join(' · ');
   } else if (activeTab === 'projects') {
     sub.textContent = `${projects.length} project${projects.length !== 1 ? 's' : ''} · ${clips.length} total clips`;
+  } else if (showTrash) {
+    sub.textContent = `${trashClips.length} trashed note${trashClips.length !== 1 ? 's' : ''}`;
   } else if (activeTab === 'help') {
     sub.textContent = 'Help — how to use Sciurus';
   } else {
@@ -175,6 +179,10 @@ function renderGeneralSidebar(el) {
   html += `<button class="sb-btn ${showArchived ? 'active' : ''}" onclick="toggleArchived()" title="Show or hide archived completed notes">
     ${showArchived ? '&#x2611; Show Archived' : '&#x2610; Show Archived'}</button>`;
 
+  html += '<div class="sec" style="margin-top:12px">Trash</div>';
+  html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
+    &#x1F5D1; Trash</button>`;
+
   el.innerHTML = html;
 }
 
@@ -195,6 +203,10 @@ function renderProjectsSidebar(el) {
   html += '<div class="sec" style="margin-top:12px">Archive</div>';
   html += `<button class="sb-btn ${showArchived ? 'active' : ''}" onclick="toggleArchived()" title="Show or hide archived completed notes">
     ${showArchived ? '&#x2611; Show Archived' : '&#x2610; Show Archived'}</button>`;
+
+  html += '<div class="sec" style="margin-top:12px">Trash</div>';
+  html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
+    &#x1F5D1; Trash</button>`;
 
   el.innerHTML = html;
 }
@@ -356,7 +368,8 @@ function renderHelpContent(el) {
 
 function renderContent() {
   const el = document.getElementById('mainArea');
-  if (activeTab === 'general') renderGeneralContent(el);
+  if (showTrash) renderTrashContent(el);
+  else if (activeTab === 'general') renderGeneralContent(el);
   else if (activeTab === 'projects') renderProjectsContent(el);
   else if (activeTab === 'settings') { renderSettingsContent(el); loadPromptBlocks(); }
   else if (activeTab === 'help') renderHelpContent(el);
@@ -442,6 +455,77 @@ function setStatus(status) {
 function toggleArchived() {
   showArchived = !showArchived;
   renderAll();
+}
+
+async function toggleTrash() {
+  showTrash = !showTrash;
+  if (showTrash) {
+    trashClips = await window.quickclip.getTrash();
+  }
+  renderAll();
+}
+
+async function restoreClip(id) {
+  await window.quickclip.restoreClip(id);
+  trashClips = trashClips.filter((c) => c.id !== id);
+  clips = await window.quickclip.getClips();
+  renderAll();
+}
+
+async function permanentDeleteClip(id) {
+  if (!confirm('Permanently delete this note? This cannot be undone.')) return;
+  await window.quickclip.permanentDeleteClip(id);
+  trashClips = trashClips.filter((c) => c.id !== id);
+  renderAll();
+}
+
+async function emptyTrash() {
+  if (!confirm(`Permanently delete all ${trashClips.length} trashed note(s)? This cannot be undone.`)) return;
+  await window.quickclip.emptyTrash();
+  trashClips = [];
+  renderAll();
+}
+
+function renderTrashContent(el) {
+  let html = `<div class="project-detail-header">
+    <div>
+      <h2 style="display:inline">&#x1F5D1; Trash</h2>
+      <span style="color:var(--text-dim);margin-left:8px;font-size:12px">Items auto-delete after 30 days</span>
+    </div>`;
+  if (trashClips.length > 0) {
+    html += `<div class="project-detail-actions">
+      <button class="sb-btn-action" onclick="emptyTrash()" title="Permanently delete all trashed notes" style="color:var(--danger)">&#x1F5D1; Empty Trash</button>
+    </div>`;
+  }
+  html += `</div>`;
+
+  if (trashClips.length === 0) {
+    html += `<div class="empty"><div class="ico">&#x2705;</div>
+      <div class="empty-title">Trash is empty</div>
+      <div class="empty-sub">Deleted notes appear here for 30 days before being permanently removed</div></div>`;
+  } else {
+    trashClips.forEach((c) => {
+      const id = escAttr(c.id);
+      html += `<div class="clip trash-clip">`;
+      html += `<div class="clip-header">`;
+      html += `<span class="cat-badge" style="opacity:0.6">${esc(c.category)}</span>`;
+      if (c.projectName) html += `<span class="proj-badge" style="opacity:0.6">${esc(c.projectName)}</span>`;
+      html += `<div class="clip-actions">`;
+      html += `<span class="clip-time">${timeAgo(c.timestamp)}</span>`;
+      html += `<button class="sb-btn-action" onclick="restoreClip('${id}')" title="Restore this note" style="font-size:12px;padding:2px 8px">&#x21A9; Restore</button>`;
+      html += `<button class="del-btn" onclick="permanentDeleteClip('${id}')" title="Permanently delete">&#x2715;</button>`;
+      html += `</div></div>`;
+      if (c.comment) html += `<div class="comment">${esc(c.comment)}</div>`;
+      if (c.aiSummary) html += `<div class="ai-summary" style="opacity:0.6">${esc(c.aiSummary)}</div>`;
+      if (c.tags && c.tags.length) {
+        html += `<div class="tags" style="opacity:0.6">${c.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>`;
+      }
+      html += `</div>`;
+    });
+  }
+
+  el.innerHTML = html;
+  loadDiskImages(el);
 }
 
 async function doAiSearch() {

@@ -359,10 +359,37 @@ ipcMain.handle('update-clip', async (_, id, updates) => {
 
 ipcMain.handle('delete-clip', async (_, id) => {
   if (typeof id !== 'string') return false;
-  images.deleteImage(id);
   await db.deleteClip(id);
   notifyMainWindow('clips-changed');
   notifyMainWindow('projects-changed');
+  return true;
+});
+
+ipcMain.handle('get-trash', () => db.getTrash());
+
+ipcMain.handle('restore-clip', async (_, id) => {
+  if (typeof id !== 'string') return false;
+  await db.restoreClip(id);
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('projects-changed');
+  return true;
+});
+
+ipcMain.handle('permanent-delete-clip', async (_, id) => {
+  if (typeof id !== 'string') return false;
+  images.deleteImage(id);
+  await db.permanentDeleteClip(id);
+  notifyMainWindow('clips-changed');
+  return true;
+});
+
+ipcMain.handle('empty-trash', async () => {
+  const trashed = await db.getTrash();
+  for (const c of trashed) {
+    images.deleteImage(c.id);
+    await db.permanentDeleteClip(c.id);
+  }
+  notifyMainWindow('clips-changed');
   return true;
 });
 
@@ -710,6 +737,11 @@ async function launchMainApp() {
     console.log('[Sciurus] Custom prompt config loaded from settings');
   }
   retryUncategorized();
+
+  // Auto-purge trash items older than 30 days
+  db.purgeTrash(30).then((n) => {
+    if (n > 0) console.log(`[Sciurus] Purged ${n} old trashed clip(s)`);
+  }).catch((e) => console.error('[Sciurus] Trash purge failed:', e.message));
 
   const hotkey = process.env.HOTKEY_COMBO || 'CommandOrControl+Shift+Q';
   globalShortcut.register(hotkey, () => {
