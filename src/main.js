@@ -49,7 +49,7 @@ const DEFAULT_CATEGORIES = [
   'Hardware/GPU', 'Ideas', 'Code Patterns',
 ];
 const ALLOWED_CLIP_FIELDS = [
-  'category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment',
+  'category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment',
   'window_title', 'process_name', 'completed_at', 'archived',
 ];
 
@@ -370,6 +370,19 @@ ipcMain.handle('assign-clip-to-project', async (_, clipId, projectId) => {
   await db.updateClip(clipId, { project_id: projectId });
   notifyMainWindow('clips-changed');
   notifyMainWindow('projects-changed');
+
+  // Auto-generate fix prompt in background when assigning to a project
+  if (projectId && ai.isEnabled()) {
+    const clip = await db.getClip(clipId);
+    if (clip && clip.comment && !clip.aiFixPrompt) {
+      ai.summarizeNotes([{ id: clip.id, comment: clip.comment }]).then((results) => {
+        if (results.length > 0 && results[0].summary) {
+          db.updateClip(clipId, { aiFixPrompt: results[0].summary });
+          notifyMainWindow('clips-changed');
+        }
+      }).catch((e) => console.error('[Sciurus] Fix prompt generation failed:', e.message));
+    }
+  }
   return true;
 });
 
@@ -452,14 +465,14 @@ ipcMain.handle('has-api-key', () => ai.isEnabled());
 
 ipcMain.handle('summarize-project', async (_, projectId) => {
   const projectClips = await db.getClips(projectId);
-  const missing = projectClips.filter((c) => !c.aiSummary && c.comment);
+  const missing = projectClips.filter((c) => !c.aiFixPrompt && c.comment);
   if (missing.length > 0 && ai.isEnabled()) {
     const generated = await ai.summarizeNotes(missing);
     for (const item of generated) {
       const clip = projectClips.find((c) => c.id === item.id);
       if (clip && item.summary) {
-        clip.aiSummary = item.summary;
-        await db.updateClip(clip.id, { aiSummary: item.summary });
+        clip.aiFixPrompt = item.summary;
+        await db.updateClip(clip.id, { aiFixPrompt: item.summary });
       }
     }
     notifyMainWindow('clips-changed');
@@ -468,6 +481,7 @@ ipcMain.handle('summarize-project', async (_, projectId) => {
     id: c.id,
     comment: c.comment || '',
     aiSummary: c.aiSummary || '',
+    aiFixPrompt: c.aiFixPrompt || '',
     category: c.category || '',
     tags: c.tags || [],
     timestamp: c.timestamp,

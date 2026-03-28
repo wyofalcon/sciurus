@@ -619,7 +619,7 @@ async function showProjectSummary(projectId) {
 }
 
 function renderSummaryPanel(el, proj, results) {
-  const withContent = results.filter((r) => r.comment || r.aiSummary);
+  const withContent = results.filter((r) => r.comment || r.aiFixPrompt);
   if (withContent.length === 0) {
     el.innerHTML = `<div class="project-detail-header">
       <div>
@@ -656,7 +656,7 @@ function renderSummaryPanel(el, proj, results) {
         <div class="summary-note-meta">${catBadge} ${timeAgo(r.timestamp)}</div>
       </div>
       <div class="summary-col summary-ai">
-        ${r.aiSummary ? `<div class="summary-ai-text">${esc(r.aiSummary)}</div>${tags}` : '<div class="summary-no-ai">No fix prompt generated</div>'}
+        ${r.aiFixPrompt ? `<div class="summary-ai-text">${esc(r.aiFixPrompt)}</div>${tags}` : '<div class="summary-no-ai">No fix prompt generated</div>'}
       </div>
     </div>`;
   });

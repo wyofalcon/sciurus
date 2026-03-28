@@ -146,6 +146,7 @@ function runSqliteMigrations() {
     `ALTER TABLE clips ADD COLUMN completed_at TEXT DEFAULT NULL`,
     `ALTER TABLE clips ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
     `CREATE INDEX IF NOT EXISTS idx_clips_archived ON clips(archived)`,
+    `ALTER TABLE clips ADD COLUMN ai_fix_prompt TEXT DEFAULT NULL`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column/index already exists */ }
@@ -220,6 +221,7 @@ const CLIPS_BASE_QUERY = `
          cat.name AS category,
          c.project_id, p.name AS "projectName",
          c.tags, c.ai_summary AS "aiSummary",
+         c.ai_fix_prompt AS "aiFixPrompt",
          c.url, c.status, c.timestamp,
          c.completed_at AS "completedAt",
          c.archived,
@@ -290,7 +292,7 @@ async function saveClip(clip) {
 }
 
 async function updateClip(id, updates) {
-  const ALLOWED = ['category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived'];
+  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived'];
   const setClauses = [];
   const params = [];
 
@@ -303,6 +305,9 @@ async function updateClip(id, updates) {
       params.push(catId);
     } else if (key === 'aiSummary') {
       setClauses.push('ai_summary = ?');
+      params.push(val);
+    } else if (key === 'aiFixPrompt') {
+      setClauses.push('ai_fix_prompt = ?');
       params.push(val);
     } else if (key === 'tags') {
       setClauses.push('tags = ?');
