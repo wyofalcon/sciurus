@@ -302,8 +302,9 @@ function renderHelpContent(el) {
         <p><strong>Clip cards:</strong></p>
         <ul>
           <li>Click the <strong>thumbnail</strong> to expand/collapse the full screenshot</li>
+          <li>Click <strong>+ Tag</strong> to add a tag from existing tags or create a new one</li>
           <li>Click <strong>+ Comment</strong> to add a follow-up note (threaded)</li>
-          <li>Click <strong>x</strong> to delete a clip</li>
+          <li>Click <strong>x</strong> to move a clip to trash</li>
         </ul>
       </div>
 
@@ -1290,9 +1291,27 @@ function renderClipCard(c, inProject) {
   }
 
   // Tags
+  html += `<div class="tags-row">`;
   if (c.tags && c.tags.length) {
-    html += `<div class="tags">${c.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>`;
+    html += c.tags.map((t) => `<span class="tag">#${esc(t)}<button class="tag-remove" onclick="removeTag('${id}','${escAttr(t)}')" title="Remove tag">&times;</button></span>`).join('');
   }
+  html += `<button class="add-tag-btn" onclick="showTagInput('${id}')" title="Add a tag">+ Tag</button>`;
+  html += `</div>`;
+  html += `<div id="ti-${id}" style="display:none;margin-bottom:6px;gap:4px">`;
+  html += `<select class="tag-select" id="tsel-${id}" onchange="onTagSelect('${id}', this.value)">`;
+  html += `<option value="">Pick a tag...</option>`;
+  const allKnownTags = [];
+  clips.forEach((cl) => { if (cl.tags && cl.tags.length) cl.tags.forEach((t) => { if (!allKnownTags.includes(t)) allKnownTags.push(t); }); });
+  allKnownTags.sort();
+  const currentTags = c.tags || [];
+  allKnownTags.forEach((t) => {
+    if (!currentTags.includes(t)) html += `<option value="${escAttr(t)}">#${esc(t)}</option>`;
+  });
+  html += `<option value="__new__">New tag...</option>`;
+  html += `</select>`;
+  html += `<input class="tag-input" id="tin-${id}" placeholder="new tag..." style="display:none" `
+    + `onkeydown="if(event.key==='Enter')addTag('${id}');if(event.key==='Escape')hideTagInput('${id}')" />`;
+  html += `</div>`;
 
   // Thread comments
   if (c.comments && c.comments.length) {
@@ -1424,6 +1443,64 @@ async function addComment(id) {
   await window.quickclip.updateClip(id, { comments: clip.comments });
   input.value = '';
   hideCommentInput(id);
+  renderAll();
+}
+
+// ── Tag Management ──
+
+function showTagInput(id) {
+  const el = document.getElementById('ti-' + id);
+  if (el) { el.style.display = 'flex'; }
+}
+
+function hideTagInput(id) {
+  const el = document.getElementById('ti-' + id);
+  if (el) el.style.display = 'none';
+  const input = document.getElementById('tin-' + id);
+  if (input) { input.style.display = 'none'; input.value = ''; }
+  const sel = document.getElementById('tsel-' + id);
+  if (sel) sel.value = '';
+}
+
+async function onTagSelect(id, value) {
+  if (value === '__new__') {
+    const input = document.getElementById('tin-' + id);
+    input.style.display = 'block';
+    input.focus();
+    return;
+  }
+  if (!value) return;
+  const clip = clips.find((c) => c.id === id);
+  if (!clip) return;
+  if (!clip.tags) clip.tags = [];
+  if (!clip.tags.includes(value)) {
+    clip.tags.push(value);
+    await window.quickclip.updateClip(id, { tags: clip.tags });
+  }
+  hideTagInput(id);
+  renderAll();
+}
+
+async function addTag(id) {
+  const input = document.getElementById('tin-' + id);
+  const raw = input.value.trim().replace(/^#/, '').trim();
+  if (!raw) return;
+  const clip = clips.find((c) => c.id === id);
+  if (!clip) return;
+  if (!clip.tags) clip.tags = [];
+  if (clip.tags.includes(raw)) { input.value = ''; return; }
+  clip.tags.push(raw);
+  await window.quickclip.updateClip(id, { tags: clip.tags });
+  input.value = '';
+  hideTagInput(id);
+  renderAll();
+}
+
+async function removeTag(id, tag) {
+  const clip = clips.find((c) => c.id === id);
+  if (!clip || !clip.tags) return;
+  clip.tags = clip.tags.filter((t) => t !== tag);
+  await window.quickclip.updateClip(id, { tags: clip.tags });
   renderAll();
 }
 

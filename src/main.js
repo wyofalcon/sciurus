@@ -252,11 +252,11 @@ async function migrateIfNeeded() {
 async function retryUncategorized() {
   if (!ai.isEnabled()) return;
   const clips = await db.getClips();
-  const pending = clips.filter((c) => c.category === 'Uncategorized' && c.comment);
+  const pending = clips.filter((c) => c.category === 'Uncategorized' && (c.comment || c.image));
   if (!pending.length) return;
   console.log(`[Sciurus] Retrying AI for ${pending.length} uncategorized clip(s)...`);
   for (const clip of pending) {
-    await autoCategorize(clip.id, clip.comment, clip.image);
+    await autoCategorize(clip.id, clip.comment || '', clip.image);
   }
 }
 
@@ -337,9 +337,9 @@ ipcMain.handle('save-clip', async (_, clip) => {
   notifyMainWindow('clips-changed');
 
   // AI categorization — runs if still uncategorized OR no project assigned
-  if ((clip.category === 'Uncategorized' || !clip.project_id) && clip.comment && ai.isEnabled()) {
-    console.log(`[Sciurus] Starting AI categorization for: "${clip.comment.slice(0, 30)}"`);
-    autoCategorize(clip.id, clip.comment, imageData, clip.window_title, clip.process_name);
+  if ((clip.category === 'Uncategorized' || !clip.project_id) && (clip.comment || imageData) && ai.isEnabled()) {
+    console.log(`[Sciurus] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
+    autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name);
   }
   return true;
 });

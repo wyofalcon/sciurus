@@ -41,7 +41,9 @@ to context-switch between your app, your terminal, and a notes doc.
 - **Markup color semantics** — red = bug, green = approved, pink = question (AI reads your annotations)
 - **AI search** — natural language search across all clips
 - **1-click project summarization** — generates actionable AI fix prompts for all project notes in a side-by-side panel with copy-all
-- **Complete/Archive system** — mark notes as done (keep visible or archive), with undo
+- **Complete/Trash system** — mark notes as done (keep visible or trash), with restore from trash
+- **Tag management** — add/remove tags per clip from existing tags or create new ones, filter by tag in sidebar
+- **Sorting** — sort notes by newest, oldest, or tag A-Z
 - **Dual database backend** — PostgreSQL (Docker) for power users, SQLite (built-in) for zero-setup
 - **Disk-based image storage** — screenshots saved to filesystem, not bloating the database
 - **Project organization** — group clips by project with dedicated views
@@ -50,7 +52,7 @@ to context-switch between your app, your terminal, and a notes doc.
 - **Threaded comments** — add follow-up notes to any clip
 - **Setup wizard** — 3-step first-run flow: database, AI config, launch
 - **Settings panel** — configure capture, AI, and app behavior in-app
-- **Cross-platform** — Windows and Linux (AppImage, deb)
+- **Cross-platform** — Windows, Linux (AppImage, deb), macOS (dev supported)
 
 ---
 
@@ -249,7 +251,15 @@ npm run build:win
 npm run build:linux
 ```
 
-### Both platforms
+### macOS (.dmg)
+
+```bash
+npm run build:mac
+```
+
+> **Note:** Window metadata capture is not yet implemented on macOS. All other features work.
+
+### All platforms
 
 ```bash
 npm run build
@@ -321,7 +331,7 @@ sciurus/
 | **AI** | Gemini 2.5 Flash | API key or Vertex AI with native JWT (zero SDK deps) |
 | **Rules** | In-memory | Window title + process name matching, regex support, 5-min cache |
 | **Window Info** | OS-native | Win32 P/Invoke, xdotool (X11), gdbus (Wayland+GNOME) |
-| **Build** | electron-builder | NSIS (Windows), AppImage + deb (Linux) |
+| **Build** | electron-builder | NSIS (Windows), AppImage + deb (Linux), dmg (macOS) |
 
 ---
 
