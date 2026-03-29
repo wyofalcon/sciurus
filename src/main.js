@@ -365,6 +365,29 @@ ipcMain.handle('update-clip', async (_, id, updates) => {
   const fields = Object.keys(safe).join(', ');
   addAuditEntry('update', `Clip ${id} updated: ${fields}`);
   notifyMainWindow('clips-changed');
+
+  // Auto re-run AI when comment or thread comments change
+  if (ai.isEnabled() && ('comment' in safe || 'comments' in safe)) {
+    const clip = await db.getClip(id);
+    if (clip) {
+      const imageData = images.loadImage(id);
+      // Re-categorize (updates aiSummary, tags, category, etc.)
+      autoCategorize(id, clip.comment || '', imageData, clip.windowTitle, clip.processName)
+        .then(async () => {
+          // Also regenerate aiFixPrompt if clip is in a project
+          if (clip.project_id) {
+            const compressed = imageData ? images.compressForAI(imageData) : null;
+            const results = await ai.summarizeNotes([{ id, comment: clip.comment || '', imageDataURL: compressed }]);
+            if (results.length > 0 && results[0].summary) {
+              const count = (clip.summarizeCount || 0) + 1;
+              await db.updateClip(id, { aiFixPrompt: results[0].summary, summarize_count: count });
+              notifyMainWindow('clips-changed');
+            }
+          }
+        })
+        .catch((e) => console.error('[Sciurus] Auto AI re-categorize on edit error:', e.message));
+    }
+  }
   return true;
 });
 

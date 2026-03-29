@@ -1203,7 +1203,7 @@ kbd {
 
 .summary-note-text {
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--accent-violet);
   line-height: 1.5;
   margin-bottom: 6px;
 }
@@ -1230,6 +1230,37 @@ kbd {
   font-size: 12px;
   color: var(--text-dim);
   font-style: italic;
+}
+
+/* Collapsible original note in summary panel */
+.original-note-toggle {
+  margin-top: 8px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.original-note-toggle summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.3px;
+  padding: 4px 0;
+  user-select: none;
+  transition: color var(--transition-fast);
+}
+.original-note-toggle summary:hover {
+  color: var(--text-primary);
+}
+.original-note-toggle summary::marker {
+  color: var(--text-dim);
+}
+.original-note-body {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--border-light);
+  margin-top: 4px;
 }
 
 /* ── Trash view ── */

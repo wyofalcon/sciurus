@@ -786,7 +786,7 @@ async function showProjectSummary(projectId) {
 }
 
 function renderSummaryPanel(el, proj, results) {
-  const withContent = results.filter((r) => r.comment || r.aiFixPrompt);
+  const withContent = results.filter((r) => r.aiSummary || r.aiFixPrompt);
   if (withContent.length === 0) {
     el.innerHTML = `<div class="project-detail-header">
       <div>
@@ -810,7 +810,7 @@ function renderSummaryPanel(el, proj, results) {
 
   html += `<div class="summary-panel">`;
   html += `<div class="summary-row summary-header-row">
-    <div class="summary-col-label">Original Note</div>
+    <div class="summary-col-label">AI Summary</div>
     <div class="summary-col-label">AI Fix Prompt</div>
   </div>`;
 
@@ -819,10 +819,12 @@ function renderSummaryPanel(el, proj, results) {
     const tags = (r.tags && r.tags.length) ? `<div class="summary-tags">${r.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>` : '';
     const sumCount = r.summarizeCount || 0;
     const rowDarken = sumCount > 0 ? ` style="background: color-mix(in srgb, var(--bg-card), black ${Math.min(sumCount * 6, 30)}%)"` : '';
+    const hasOriginal = r.comment && r.comment.trim();
     html += `<div class="summary-row"${rowDarken}>
       <div class="summary-col summary-original">
-        <div class="summary-note-text">${esc(r.comment) || '<em>No note</em>'}</div>
+        <div class="summary-note-text">${esc(r.aiSummary) || '<em>No AI summary</em>'}</div>
         <div class="summary-note-meta">${catBadge} ${timeAgo(r.timestamp)}${sumCount > 0 ? ` <span class="badge badge-summarized">&#x2728; ${sumCount}x</span>` : ''}</div>
+        ${hasOriginal ? `<details class="original-note-toggle"><summary>Original Note</summary><div class="original-note-body">${esc(r.comment)}</div></details>` : ''}
       </div>
       <div class="summary-col summary-ai">
         ${r.aiFixPrompt ? `<div class="summary-ai-text">${esc(r.aiFixPrompt)}</div>${tags}` : '<div class="summary-no-ai">No fix prompt generated</div>'}
@@ -840,11 +842,11 @@ function copySummaryPanel() {
 
   let text = '';
   rows.forEach((row) => {
-    const original = row.querySelector('.summary-original .summary-note-text');
+    const summary = row.querySelector('.summary-original .summary-note-text');
     const ai = row.querySelector('.summary-ai-text');
-    const note = original ? original.textContent.trim() : '';
+    const summaryText = summary ? summary.textContent.trim() : '';
     const prompt = ai ? ai.textContent.trim() : '(no prompt generated)';
-    text += `## Task\n${prompt}\n\nContext: ${note}\n\n---\n\n`;
+    text += `## Task\n${prompt}\n\nAI Summary: ${summaryText}\n\n---\n\n`;
   });
 
   navigator.clipboard.writeText(text.trim()).then(() => {
