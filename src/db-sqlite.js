@@ -50,6 +50,10 @@ const SCHEMA = `
     ai_summary    TEXT DEFAULT NULL,
     url           TEXT DEFAULT NULL,
     status        TEXT NOT NULL DEFAULT 'parked' CHECK (status IN ('active', 'parked')),
+    completed_at  TEXT DEFAULT NULL,
+    archived      INTEGER NOT NULL DEFAULT 0,
+    ai_fix_prompt TEXT DEFAULT NULL,
+    deleted_at    TEXT DEFAULT NULL,
     timestamp     INTEGER NOT NULL,
     window_title  TEXT DEFAULT NULL,
     process_name  TEXT DEFAULT NULL,
@@ -81,6 +85,7 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_clips_project ON clips(project_id);
   CREATE INDEX IF NOT EXISTS idx_clips_category ON clips(category_id);
   CREATE INDEX IF NOT EXISTS idx_clips_status ON clips(status);
+  CREATE INDEX IF NOT EXISTS idx_clips_archived ON clips(archived);
   CREATE INDEX IF NOT EXISTS idx_clips_timestamp ON clips(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_clips_process ON clips(process_name);
   CREATE INDEX IF NOT EXISTS idx_clip_comments_clip ON clip_comments(clip_id);
@@ -126,12 +131,30 @@ async function init(dbPath) {
       for (const [key, val] of DEFAULT_SETTINGS) ins.run(key, val);
     }
 
+    // Migrations for existing databases
+    runSqliteMigrations();
+
     await refreshCategoryCache();
     console.log(`[Sciurus DB] SQLite ready: ${dbPath}`);
     return true;
   } catch (e) {
     console.error('[Sciurus DB] SQLite init failed:', e.message);
     return false;
+  }
+}
+
+function runSqliteMigrations() {
+  const migrations = [
+    `ALTER TABLE clips ADD COLUMN completed_at TEXT DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
+    `CREATE INDEX IF NOT EXISTS idx_clips_archived ON clips(archived)`,
+    `ALTER TABLE clips ADD COLUMN ai_fix_prompt TEXT DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN deleted_at TEXT DEFAULT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
+    `ALTER TABLE clips ADD COLUMN summarize_count INTEGER NOT NULL DEFAULT 0`,
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); } catch (e) { /* column/index already exists */ }
   }
 }
 
@@ -203,9 +226,14 @@ const CLIPS_BASE_QUERY = `
          cat.name AS category,
          c.project_id, p.name AS "projectName",
          c.tags, c.ai_summary AS "aiSummary",
+         c.ai_fix_prompt AS "aiFixPrompt",
          c.url, c.status, c.timestamp,
+         c.completed_at AS "completedAt",
+         c.archived,
          c.window_title AS "windowTitle",
          c.process_name AS "processName",
+         c.deleted_at AS "deletedAt",
+         c.summarize_count AS "summarizeCount",
          CASE WHEN COUNT(cc.id) = 0 THEN '[]'
               ELSE json_group_array(json_object('text', cc.text, 'ts', cc.ts))
          END AS comments
@@ -222,19 +250,19 @@ const CLIPS_GROUP = `
 
 function parseClipRow(row) {
   if (!row) return null;
-  row.tags = JSON.parse(row.tags || '[]');
-  row.comments = JSON.parse(row.comments || '[]');
+  try { row.tags = JSON.parse(row.tags || '[]'); } catch { row.tags = []; }
+  try { row.comments = JSON.parse(row.comments || '[]'); } catch { row.comments = []; }
   return row;
 }
 
 async function getClips(projectId) {
   let rows;
   if (projectId === undefined) {
-    rows = db.prepare(CLIPS_BASE_QUERY + CLIPS_GROUP).all();
+    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NULL ' + CLIPS_GROUP).all();
   } else if (projectId === null) {
-    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL ' + CLIPS_GROUP).all();
+    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL AND c.deleted_at IS NULL ' + CLIPS_GROUP).all();
   } else {
-    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id = ? ' + CLIPS_GROUP).all(projectId);
+    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id = ? AND c.deleted_at IS NULL ' + CLIPS_GROUP).all(projectId);
   }
   return rows.map(parseClipRow);
 }
@@ -271,7 +299,7 @@ async function saveClip(clip) {
 }
 
 async function updateClip(id, updates) {
-  const ALLOWED = ['category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment'];
+  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived', 'summarize_count'];
   const setClauses = [];
   const params = [];
 
@@ -284,6 +312,9 @@ async function updateClip(id, updates) {
       params.push(catId);
     } else if (key === 'aiSummary') {
       setClauses.push('ai_summary = ?');
+      params.push(val);
+    } else if (key === 'aiFixPrompt') {
+      setClauses.push('ai_fix_prompt = ?');
       params.push(val);
     } else if (key === 'tags') {
       setClauses.push('tags = ?');
@@ -307,6 +338,15 @@ async function updateClip(id, updates) {
     } else if (key === 'comment') {
       setClauses.push('comment = ?');
       params.push(val);
+    } else if (key === 'completed_at') {
+      setClauses.push('completed_at = ?');
+      params.push(val);
+    } else if (key === 'archived') {
+      setClauses.push('archived = ?');
+      params.push(val ? 1 : 0);
+    } else if (key === 'summarize_count') {
+      setClauses.push('summarize_count = ?');
+      params.push(val);
     }
   }
 
@@ -318,8 +358,38 @@ async function updateClip(id, updates) {
 }
 
 async function deleteClip(id) {
+  db.prepare('UPDATE clips SET deleted_at = datetime(\'now\') WHERE id = ?').run(id);
+  return true;
+}
+
+async function restoreClip(id) {
+  db.prepare('UPDATE clips SET deleted_at = NULL WHERE id = ?').run(id);
+  return true;
+}
+
+async function permanentDeleteClip(id) {
   db.prepare('DELETE FROM clips WHERE id = ?').run(id);
   return true;
+}
+
+async function getTrash() {
+  const rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NOT NULL ' + CLIPS_GROUP).all();
+  return rows.map(parseClipRow);
+}
+
+async function purgeTrash(olderThanDays = 30) {
+  const result = db.prepare(
+    `DELETE FROM clips WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-' || ? || ' days')`
+  ).run(olderThanDays);
+  return result.changes;
+}
+
+async function migrateArchivedToTrash() {
+  const result = db.prepare(
+    `UPDATE clips SET deleted_at = datetime('now'), archived = 0 WHERE archived = 1 AND deleted_at IS NULL`
+  ).run();
+  if (result.changes > 0) console.log(`[Sciurus DB] Migrated ${result.changes} archived clip(s) to trash`);
+  return result.changes;
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +412,7 @@ async function deleteComment(commentId) {
 
 async function getProjects() {
   const rows = db.prepare(`
-    SELECT p.*, (SELECT COUNT(*) FROM clips WHERE project_id = p.id) AS "clipCount"
+    SELECT p.*, (SELECT COUNT(*) FROM clips WHERE project_id = p.id AND deleted_at IS NULL) AS "clipCount"
     FROM projects p ORDER BY p.name
   `).all();
   return rows;
@@ -486,6 +556,10 @@ module.exports = {
   saveClip,
   updateClip,
   deleteClip,
+  restoreClip,
+  permanentDeleteClip,
+  getTrash,
+  purgeTrash,
   getCategories,
   getCategoryId,
   getCategoryName,
@@ -506,4 +580,5 @@ module.exports = {
   getAllSettings,
   saveSetting,
   migrateFromStore,
+  migrateArchivedToTrash,
 };

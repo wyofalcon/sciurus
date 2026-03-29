@@ -3,6 +3,10 @@
 // Clear before requiring electron — inherited from VS Code / Claude Code shell
 delete process.env.ELECTRON_RUN_AS_NODE;
 
+// Suppress EPIPE errors on stdout/stderr (happens when launched via pipe that closes early)
+process.stdout?.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
+process.stderr?.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
+
 const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -45,8 +49,8 @@ const DEFAULT_CATEGORIES = [
   'Hardware/GPU', 'Ideas', 'Code Patterns',
 ];
 const ALLOWED_CLIP_FIELDS = [
-  'category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment',
-  'window_title', 'process_name',
+  'category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment',
+  'window_title', 'process_name', 'completed_at', 'archived', 'summarize_count',
 ];
 
 // Tiny 32x32 fallback icon (transparent PNG) for the system tray
@@ -141,6 +145,7 @@ function createMainWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  if (process.env.SCIURUS_DEV === '1') mainWindow.webContents.openDevTools();
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
@@ -247,11 +252,11 @@ async function migrateIfNeeded() {
 async function retryUncategorized() {
   if (!ai.isEnabled()) return;
   const clips = await db.getClips();
-  const pending = clips.filter((c) => c.category === 'Uncategorized' && c.comment);
+  const pending = clips.filter((c) => c.category === 'Uncategorized' && (c.comment || c.image));
   if (!pending.length) return;
   console.log(`[Sciurus] Retrying AI for ${pending.length} uncategorized clip(s)...`);
   for (const clip of pending) {
-    await autoCategorize(clip.id, clip.comment, clip.image);
+    await autoCategorize(clip.id, clip.comment || '', clip.image);
   }
 }
 
@@ -331,10 +336,11 @@ ipcMain.handle('save-clip', async (_, clip) => {
   await db.saveClip(clip);
   notifyMainWindow('clips-changed');
 
-  // AI categorization as fallback — only if still uncategorized after rules
-  if (clip.category === 'Uncategorized' && clip.comment && ai.isEnabled()) {
-    console.log(`[Sciurus] Starting AI categorization for: "${clip.comment.slice(0, 30)}"`);
-    autoCategorize(clip.id, clip.comment, imageData, clip.window_title, clip.process_name);
+  // AI categorization — runs if still uncategorized OR no project assigned
+  if ((clip.category === 'Uncategorized' || !clip.project_id) && (clip.comment || imageData) && ai.isEnabled()) {
+    console.log(`[Sciurus] Starting AI categorization for: "${(clip.comment || '(screenshot only)').slice(0, 30)}"`);
+    autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
+      .catch(e => console.error('[Sciurus] Auto-categorize background error:', e.message));
   }
   return true;
 });
@@ -354,14 +360,78 @@ ipcMain.handle('update-clip', async (_, id, updates) => {
 
 ipcMain.handle('delete-clip', async (_, id) => {
   if (typeof id !== 'string') return false;
-  images.deleteImage(id);
   await db.deleteClip(id);
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('projects-changed');
+  return true;
+});
+
+ipcMain.handle('get-trash', () => db.getTrash());
+
+ipcMain.handle('restore-clip', async (_, id) => {
+  if (typeof id !== 'string') return false;
+  await db.restoreClip(id);
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('projects-changed');
+  return true;
+});
+
+ipcMain.handle('permanent-delete-clip', async (_, id) => {
+  if (typeof id !== 'string') return false;
+  images.deleteImage(id);
+  await db.permanentDeleteClip(id);
+  notifyMainWindow('clips-changed');
+  return true;
+});
+
+ipcMain.handle('empty-trash', async () => {
+  const trashed = await db.getTrash();
+  for (const c of trashed) {
+    images.deleteImage(c.id);
+    await db.permanentDeleteClip(c.id);
+  }
   notifyMainWindow('clips-changed');
   return true;
 });
 
 ipcMain.handle('assign-clip-to-project', async (_, clipId, projectId) => {
   await db.updateClip(clipId, { project_id: projectId });
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('projects-changed');
+
+  // Auto-generate fix prompt in background when assigning to a project
+  if (projectId && ai.isEnabled()) {
+    const clip = await db.getClip(clipId);
+    if (clip && clip.comment && !clip.aiFixPrompt) {
+      ai.summarizeNotes([{ id: clip.id, comment: clip.comment }]).then((results) => {
+        if (results.length > 0 && results[0].summary) {
+          db.updateClip(clipId, { aiFixPrompt: results[0].summary });
+          notifyMainWindow('clips-changed');
+        }
+      }).catch((e) => console.error('[Sciurus] Fix prompt generation failed:', e.message));
+    }
+  }
+  return true;
+});
+
+ipcMain.handle('complete-clip', async (_, clipId, archive) => {
+  if (typeof clipId !== 'string') return false;
+  const updates = { completed_at: new Date().toISOString() };
+  if (archive) {
+    // Archive option now sends to trash instead
+    await db.updateClip(clipId, updates);
+    await db.deleteClip(clipId);
+  } else {
+    await db.updateClip(clipId, updates);
+  }
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('projects-changed');
+  return true;
+});
+
+ipcMain.handle('uncomplete-clip', async (_, clipId) => {
+  if (typeof clipId !== 'string') return false;
+  await db.updateClip(clipId, { completed_at: null });
   notifyMainWindow('clips-changed');
   return true;
 });
@@ -427,6 +497,34 @@ ipcMain.handle('ai-search', async (_, query) => {
 
 ipcMain.handle('has-api-key', () => ai.isEnabled());
 
+ipcMain.handle('summarize-project', async (_, projectId) => {
+  const projectClips = await db.getClips(projectId);
+  const missing = projectClips.filter((c) => !c.aiFixPrompt && c.comment);
+  if (missing.length > 0 && ai.isEnabled()) {
+    const generated = await ai.summarizeNotes(missing);
+    for (const item of generated) {
+      const clip = projectClips.find((c) => c.id === item.id);
+      if (clip && item.summary) {
+        clip.aiFixPrompt = item.summary;
+        const newCount = (clip.summarizeCount || 0) + 1;
+        clip.summarizeCount = newCount;
+        await db.updateClip(clip.id, { aiFixPrompt: item.summary, summarize_count: newCount });
+      }
+    }
+    notifyMainWindow('clips-changed');
+  }
+  return projectClips.map((c) => ({
+    id: c.id,
+    comment: c.comment || '',
+    aiSummary: c.aiSummary || '',
+    aiFixPrompt: c.aiFixPrompt || '',
+    category: c.category || '',
+    tags: c.tags || [],
+    timestamp: c.timestamp,
+    summarizeCount: c.summarizeCount || 0,
+  }));
+});
+
 // ── IPC Handlers: AI Prompt ──
 
 ipcMain.handle('get-prompt-blocks', () => ai.getPromptBlocks());
@@ -460,6 +558,17 @@ ipcMain.handle('get-app-version', () => {
 });
 
 ipcMain.handle('get-db-backend', () => db.getBackendName());
+
+// Manual AI retrigger for a single clip
+ipcMain.handle('retrigger-ai', async (_, clipId) => {
+  if (typeof clipId !== 'string') return false;
+  const clip = await db.getClip(clipId);
+  if (!clip) return false;
+  if (!ai.isEnabled()) return false;
+  const imageData = images.loadImage(clipId);
+  await autoCategorize(clipId, clip.comment || '', imageData, clip.windowTitle, clip.processName);
+  return true;
+});
 
 // ── IPC Handlers: Window Controls ──
 
@@ -540,6 +649,9 @@ ipcMain.handle('setup-check-credentials', async () => {
 
 ipcMain.handle('setup-save-env', async (_, key, value) => {
   const envPath = path.join(__dirname, '..', '.env');
+  // Validate key/value to prevent injection
+  if (!/^[A-Z_][A-Z0-9_]*$/i.test(key)) return false;
+  const safeValue = String(value).replace(/[\r\n]/g, '').trim();
   let content = '';
   if (fs.existsSync(envPath)) {
     content = fs.readFileSync(envPath, 'utf8');
@@ -547,13 +659,13 @@ ipcMain.handle('setup-save-env', async (_, key, value) => {
   // Replace existing key or append
   const regex = new RegExp(`^${key}=.*$`, 'm');
   if (regex.test(content)) {
-    content = content.replace(regex, `${key}=${value}`);
+    content = content.replace(regex, `${key}=${safeValue}`);
   } else {
-    content = content.trimEnd() + `\n${key}=${value}\n`;
+    content = content.trimEnd() + `\n${key}=${safeValue}\n`;
   }
   fs.writeFileSync(envPath, content, 'utf8');
   // Also set in current process
-  process.env[key] = value;
+  process.env[key] = safeValue;
   return true;
 });
 
@@ -616,10 +728,7 @@ if (app.isPackaged && process.platform === 'win32') {
 
 /** Launch the main app (called after setup or directly on normal start). */
 async function launchMainApp() {
-  if (!mainWindow) createMainWindow();
-  createTray();
-
-  // Initialize database (waits for Docker PostgreSQL)
+  // Initialize database BEFORE creating the window (renderer calls getClips on load)
   const dbReady = await db.init();
   if (!dbReady) {
     dialog.showErrorBox(
@@ -635,6 +744,9 @@ async function launchMainApp() {
   // One-time migration from electron-store
   await migrateIfNeeded();
 
+  if (!mainWindow) createMainWindow();
+  createTray();
+
   // Show the main window
   mainWindow.show();
   mainWindow.focus();
@@ -649,6 +761,16 @@ async function launchMainApp() {
     console.log('[Sciurus] Custom prompt config loaded from settings');
   }
   retryUncategorized();
+
+  // Auto-purge trash items older than 30 days
+  db.purgeTrash(30).then((n) => {
+    if (n > 0) console.log(`[Sciurus] Purged ${n} old trashed clip(s)`);
+  }).catch((e) => console.error('[Sciurus] Trash purge failed:', e.message));
+
+  // One-time migration: move archived clips to trash
+  db.migrateArchivedToTrash().catch((e) =>
+    console.error('[Sciurus] Archive→Trash migration failed:', e.message)
+  );
 
   const hotkey = process.env.HOTKEY_COMBO || 'CommandOrControl+Shift+Q';
   globalShortcut.register(hotkey, () => {

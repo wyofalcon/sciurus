@@ -68,6 +68,10 @@ module.exports = {
   saveClip: (...a) => backend.saveClip(...a),
   updateClip: (...a) => backend.updateClip(...a),
   deleteClip: (...a) => backend.deleteClip(...a),
+  restoreClip: (...a) => backend.restoreClip(...a),
+  permanentDeleteClip: (...a) => backend.permanentDeleteClip(...a),
+  getTrash: (...a) => backend.getTrash(...a),
+  purgeTrash: (...a) => backend.purgeTrash(...a),
   // Categories
   getCategories: (...a) => backend.getCategories(...a),
   getCategoryId: (...a) => backend.getCategoryId(...a),
@@ -94,4 +98,5 @@ module.exports = {
   saveSetting: (...a) => backend.saveSetting(...a),
   // Migration
   migrateFromStore: (...a) => backend.migrateFromStore(...a),
+  migrateArchivedToTrash: (...a) => backend.migrateArchivedToTrash(...a),
 };

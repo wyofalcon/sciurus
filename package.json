@@ -2,24 +2,24 @@
   "name": "sciurus",
   "version": "2.0.0",
   "description": "Sciurus! — ADHD-friendly knowledge capture. Screenshot, note, done. AI handles the rest.",
+  "author": "wyofalcon@gmail.com",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "cross-env SCIURUS_DEV=1 electron .",
+    "start": "node scripts/launch.js",
+    "dev": "node scripts/launch.js --dev",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux",
+    "build:mac": "electron-builder --mac",
     "pack": "electron-builder --dir",
-    "postinstall": "electron-rebuild"
+    "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0",
-    "dotenv": "^17.3.1",
     "electron-store": "^8.1.0",
     "pg": "^8.13.0"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3.0.0",
     "cross-env": "^7.0.3",
     "electron": "^33.4.11",
     "electron-builder": "^25.0.0"
@@ -30,6 +30,11 @@
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.png",
+      "category": "public.app-category.productivity"
     },
     "linux": {
       "target": [

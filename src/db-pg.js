@@ -76,6 +76,13 @@ async function runMigrations() {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_clips_process ON clips(process_name)`,
     `CREATE INDEX IF NOT EXISTS idx_window_rules_priority ON window_rules(priority DESC)`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`,
+    `CREATE INDEX IF NOT EXISTS idx_clips_archived ON clips(archived)`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS ai_fix_prompt TEXT DEFAULT NULL`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
+    `ALTER TABLE clips ADD COLUMN IF NOT EXISTS summarize_count INTEGER NOT NULL DEFAULT 0`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }
@@ -145,9 +152,14 @@ const CLIPS_BASE_QUERY = `
          cat.name AS category,
          c.project_id, p.name AS "projectName",
          c.tags, c.ai_summary AS "aiSummary",
+         c.ai_fix_prompt AS "aiFixPrompt",
          c.url, c.status, c.timestamp,
+         c.completed_at AS "completedAt",
+         c.archived,
          c.window_title AS "windowTitle",
          c.process_name AS "processName",
+         c.deleted_at AS "deletedAt",
+         c.summarize_count AS "summarizeCount",
          COALESCE(
            json_agg(
              json_build_object('text', cc.text, 'ts', cc.ts)
@@ -169,15 +181,15 @@ const CLIPS_GROUP = `
 async function getClips(projectId) {
   let query, params;
   if (projectId === undefined) {
-    // All clips
-    query = CLIPS_BASE_QUERY + CLIPS_GROUP;
+    // All clips (exclude deleted)
+    query = CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NULL ' + CLIPS_GROUP;
     params = [];
   } else if (projectId === null) {
-    // General notes (no project)
-    query = CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL ' + CLIPS_GROUP;
+    // General notes (no project, exclude deleted)
+    query = CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL AND c.deleted_at IS NULL ' + CLIPS_GROUP;
     params = [];
   } else {
-    query = CLIPS_BASE_QUERY + ' WHERE c.project_id = $1 ' + CLIPS_GROUP;
+    query = CLIPS_BASE_QUERY + ' WHERE c.project_id = $1 AND c.deleted_at IS NULL ' + CLIPS_GROUP;
     params = [projectId];
   }
   const { rows } = await pool.query(query, params);
@@ -225,7 +237,7 @@ async function saveClip(clip) {
 }
 
 async function updateClip(id, updates) {
-  const ALLOWED = ['category', 'tags', 'aiSummary', 'url', 'status', 'comments', 'project_id', 'comment'];
+  const ALLOWED = ['category', 'tags', 'aiSummary', 'aiFixPrompt', 'url', 'status', 'comments', 'project_id', 'comment', 'completed_at', 'archived', 'summarize_count'];
   const setClauses = [];
   const params = [];
   let paramIdx = 1;
@@ -239,6 +251,9 @@ async function updateClip(id, updates) {
       params.push(catId);
     } else if (key === 'aiSummary') {
       setClauses.push(`ai_summary = $${paramIdx++}`);
+      params.push(val);
+    } else if (key === 'aiFixPrompt') {
+      setClauses.push(`ai_fix_prompt = $${paramIdx++}`);
       params.push(val);
     } else if (key === 'tags') {
       setClauses.push(`tags = $${paramIdx++}`);
@@ -267,6 +282,15 @@ async function updateClip(id, updates) {
     } else if (key === 'comment') {
       setClauses.push(`comment = $${paramIdx++}`);
       params.push(val);
+    } else if (key === 'completed_at') {
+      setClauses.push(`completed_at = $${paramIdx++}`);
+      params.push(val);
+    } else if (key === 'archived') {
+      setClauses.push(`archived = $${paramIdx++}`);
+      params.push(!!val);
+    } else if (key === 'summarize_count') {
+      setClauses.push(`summarize_count = $${paramIdx++}`);
+      params.push(val);
     }
   }
 
@@ -282,8 +306,41 @@ async function updateClip(id, updates) {
 }
 
 async function deleteClip(id) {
+  await pool.query('UPDATE clips SET deleted_at = NOW() WHERE id = $1', [id]);
+  return true;
+}
+
+async function restoreClip(id) {
+  await pool.query('UPDATE clips SET deleted_at = NULL WHERE id = $1', [id]);
+  return true;
+}
+
+async function permanentDeleteClip(id) {
   await pool.query('DELETE FROM clips WHERE id = $1', [id]);
   return true;
+}
+
+async function getTrash() {
+  const { rows } = await pool.query(
+    CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NOT NULL ' + CLIPS_GROUP
+  );
+  return rows;
+}
+
+async function purgeTrash(olderThanDays = 30) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM clips WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '1 day' * $1`,
+    [olderThanDays]
+  );
+  return rowCount;
+}
+
+async function migrateArchivedToTrash() {
+  const { rowCount } = await pool.query(
+    `UPDATE clips SET deleted_at = NOW(), archived = false WHERE archived = true AND deleted_at IS NULL`
+  );
+  if (rowCount > 0) console.log(`[Sciurus DB] Migrated ${rowCount} archived clip(s) to trash`);
+  return rowCount;
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +367,7 @@ async function deleteComment(commentId) {
 async function getProjects() {
   const { rows } = await pool.query(`
     SELECT p.*,
-           (SELECT COUNT(*) FROM clips WHERE project_id = p.id) AS "clipCount"
+           (SELECT COUNT(*) FROM clips WHERE project_id = p.id AND deleted_at IS NULL)::int AS "clipCount"
     FROM projects p
     ORDER BY p.name
   `);
@@ -497,6 +554,10 @@ module.exports = {
   saveClip,
   updateClip,
   deleteClip,
+  restoreClip,
+  permanentDeleteClip,
+  getTrash,
+  purgeTrash,
   // Categories
   getCategories,
   getCategoryId,
@@ -523,4 +584,5 @@ module.exports = {
   saveSetting,
   // Migration
   migrateFromStore,
+  migrateArchivedToTrash,
 };

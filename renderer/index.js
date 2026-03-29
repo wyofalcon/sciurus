@@ -12,6 +12,10 @@ let appVersion = null;
 // General Notes tab state
 let filterCat = 'All';
 let filterStatus = 'all';
+let filterTag = null;
+let sortBy = 'date-newest';
+let showTrash = false;
+let trashClips = [];
 let aiMatchedIds = null;
 let searchQuery = '';
 
@@ -42,27 +46,33 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') window.quickclip.hideMain();
 });
 
-window.quickclip.onClipsChanged(async () => {
-  clips = await window.quickclip.getClips();
-  if (activeTab === 'general' || activeTab === 'projects') renderContent();
-  updateStatusBar();
-});
+// Debounced reload to prevent race conditions when clips-changed and
+// projects-changed fire back-to-back (e.g. AI assigns clip to project).
+let _reloadTimer = null;
+function scheduleReload() {
+  if (_reloadTimer) clearTimeout(_reloadTimer);
+  _reloadTimer = setTimeout(async () => {
+    _reloadTimer = null;
+    await loadData();
+    renderAll();
+  }, 80);
+}
 
-window.quickclip.onProjectsChanged(async () => {
-  projects = await window.quickclip.getProjects();
-  if (activeTab === 'projects') renderAll();
-});
+window.quickclip.onClipsChanged(() => scheduleReload());
+window.quickclip.onProjectsChanged(() => scheduleReload());
 
 // ── Escaping ──
 
 function esc(s) {
   if (!s) return '';
+  if (typeof s !== 'string') s = String(s);
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
           .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function escAttr(s) {
   if (!s) return '';
+  if (typeof s !== 'string') s = String(s);
   return s.replace(/&/g, '&amp;').replace(/'/g, '&#39;')
           .replace(/</g, '&lt;').replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;').replace(/\\/g, '\\\\');
@@ -117,10 +127,16 @@ function updateStatusBar() {
   const sub = document.getElementById('subtitle');
   if (activeTab === 'general') {
     const generalClips = clips.filter((c) => !c.project_id);
-    const parked = generalClips.filter((c) => c.status === 'parked').length;
-    sub.textContent = `${generalClips.length} general notes` + (parked > 0 ? ` · ${parked} parked` : '');
+    const parked = generalClips.filter((c) => c.status === 'parked' && !c.completedAt).length;
+    const completed = generalClips.filter((c) => c.completedAt).length;
+    let parts = [`${generalClips.length} general notes`];
+    if (parked > 0) parts.push(`${parked} parked`);
+    if (completed > 0) parts.push(`${completed} completed`);
+    sub.textContent = parts.join(' · ');
   } else if (activeTab === 'projects') {
     sub.textContent = `${projects.length} project${projects.length !== 1 ? 's' : ''} · ${clips.length} total clips`;
+  } else if (showTrash) {
+    sub.textContent = `${trashClips.length} trashed note${trashClips.length !== 1 ? 's' : ''}`;
   } else if (activeTab === 'help') {
     sub.textContent = 'Help — how to use Sciurus';
   } else {
@@ -154,10 +170,38 @@ function renderGeneralSidebar(el) {
   });
 
   html += '<div class="sec">Status</div>';
-  ['all', 'parked', 'active'].forEach((s) => {
+  ['all', 'parked', 'active', 'completed'].forEach((s) => {
     const label = s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1);
     html += `<button class="sb-btn ${filterStatus === s ? 'active' : ''}" onclick="setStatus('${s}')">${label}</button>`;
   });
+
+  // Tags section
+  const allTags = [];
+  generalClips.forEach((c) => {
+    if (c.tags && c.tags.length) c.tags.forEach((t) => { if (!allTags.includes(t)) allTags.push(t); });
+  });
+  allTags.sort();
+  if (allTags.length > 0) {
+    html += '<div class="sec">Tags</div>';
+    html += `<button class="sb-btn ${filterTag === null ? 'active' : ''}" onclick="setTag(null)">All Tags</button>`;
+    allTags.forEach((tag) => {
+      const count = generalClips.filter((c) => c.tags && c.tags.includes(tag)).length;
+      html += `<button class="sb-btn ${filterTag === tag ? 'active' : ''}" onclick="setTag('${escAttr(tag)}')" title="Filter by #${escAttr(tag)}">
+        <span>#${esc(tag)}</span><span class="sb-count">${count}</span></button>`;
+    });
+  }
+
+  // Sort section
+  html += '<div class="sec">Sort</div>';
+  html += `<select class="sb-select" onchange="setSortBy(this.value)">
+    <option value="date-newest" ${sortBy === 'date-newest' ? 'selected' : ''}>Newest First</option>
+    <option value="date-oldest" ${sortBy === 'date-oldest' ? 'selected' : ''}>Oldest First</option>
+    <option value="tag-az" ${sortBy === 'tag-az' ? 'selected' : ''}>Tag A-Z</option>
+  </select>`;
+
+  html += '<div class="sec" style="margin-top:12px">Trash</div>';
+  html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
+    &#x1F5D1; Trash</button>`;
 
   el.innerHTML = html;
 }
@@ -175,6 +219,11 @@ function renderProjectsSidebar(el) {
   });
 
   html += `<button class="sb-btn sb-add" onclick="showNewProjectDialog()">+ New Project</button>`;
+
+  html += '<div class="sec" style="margin-top:12px">Trash</div>';
+  html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
+    &#x1F5D1; Trash</button>`;
+
   el.innerHTML = html;
 }
 
@@ -253,8 +302,9 @@ function renderHelpContent(el) {
         <p><strong>Clip cards:</strong></p>
         <ul>
           <li>Click the <strong>thumbnail</strong> to expand/collapse the full screenshot</li>
+          <li>Click <strong>+ Tag</strong> to add a tag from existing tags or create a new one</li>
           <li>Click <strong>+ Comment</strong> to add a follow-up note (threaded)</li>
-          <li>Click <strong>x</strong> to delete a clip</li>
+          <li>Click <strong>x</strong> to move a clip to trash</li>
         </ul>
       </div>
 
@@ -335,7 +385,8 @@ function renderHelpContent(el) {
 
 function renderContent() {
   const el = document.getElementById('mainArea');
-  if (activeTab === 'general') renderGeneralContent(el);
+  if (showTrash) renderTrashContent(el);
+  else if (activeTab === 'general') renderGeneralContent(el);
   else if (activeTab === 'projects') renderProjectsContent(el);
   else if (activeTab === 'settings') { renderSettingsContent(el); loadPromptBlocks(); }
   else if (activeTab === 'help') renderHelpContent(el);
@@ -373,16 +424,24 @@ function renderGeneralContent(el) {
       + `<div class="empty-title">${isEmpty ? 'No notes yet' : 'No matches'}</div>`
       + `<div class="empty-sub">${isEmpty ? 'Take a screenshot — capture pops automatically' : 'Try a different search'}</div></div>`;
   } else {
-    html += filtered.map((c) => renderClipCard(c)).join('');
+    const tags = getAllKnownTags();
+    html += filtered.map((c) => renderClipCard(c, false, tags)).join('');
   }
 
   el.innerHTML = html;
+  loadDiskImages(el);
 }
 
 function getFilteredGeneral() {
   let filtered = clips.filter((c) => !c.project_id);
   if (filterCat !== 'All') filtered = filtered.filter((c) => c.category === filterCat);
-  if (filterStatus !== 'all') filtered = filtered.filter((c) => c.status === filterStatus);
+  if (filterStatus !== 'all') {
+    if (filterStatus === 'completed') {
+      filtered = filtered.filter((c) => c.completedAt);
+    } else {
+      filtered = filtered.filter((c) => c.status === filterStatus && !c.completedAt);
+    }
+  }
   if (aiMatchedIds) {
     filtered = filtered.filter((c) => aiMatchedIds.includes(c.id));
   } else if (searchQuery) {
@@ -395,6 +454,21 @@ function getFilteredGeneral() {
       (c.comments || []).some((x) => x.text.toLowerCase().includes(q))
     );
   }
+  // Tag filter
+  if (filterTag) {
+    filtered = filtered.filter((c) => c.tags && c.tags.includes(filterTag));
+  }
+  // Sort
+  if (sortBy === 'date-oldest') {
+    filtered.sort((a, b) => a.timestamp - b.timestamp);
+  } else if (sortBy === 'tag-az') {
+    filtered.sort((a, b) => {
+      const ta = (a.tags && a.tags.length) ? a.tags[0].toLowerCase() : 'zzz';
+      const tb = (b.tags && b.tags.length) ? b.tags[0].toLowerCase() : 'zzz';
+      return ta.localeCompare(tb);
+    });
+  }
+  // date-newest is the default order from DB
   return filtered;
 }
 
@@ -409,17 +483,102 @@ function setStatus(status) {
   renderAll();
 }
 
+function setTag(tag) {
+  filterTag = tag;
+  renderAll();
+}
+
+function setSortBy(sort) {
+  sortBy = sort;
+  renderAll();
+}
+
+async function toggleTrash() {
+  showTrash = !showTrash;
+  if (showTrash) {
+    trashClips = await window.quickclip.getTrash();
+  }
+  renderAll();
+}
+
+async function restoreClip(id) {
+  await window.quickclip.restoreClip(id);
+  trashClips = trashClips.filter((c) => c.id !== id);
+  clips = await window.quickclip.getClips();
+  renderAll();
+}
+
+async function permanentDeleteClip(id) {
+  if (!confirm('Permanently delete this note? This cannot be undone.')) return;
+  await window.quickclip.permanentDeleteClip(id);
+  trashClips = trashClips.filter((c) => c.id !== id);
+  renderAll();
+}
+
+async function emptyTrash() {
+  if (!confirm(`Permanently delete all ${trashClips.length} trashed note(s)? This cannot be undone.`)) return;
+  await window.quickclip.emptyTrash();
+  trashClips = [];
+  renderAll();
+}
+
+function renderTrashContent(el) {
+  let html = `<div class="project-detail-header">
+    <div>
+      <h2 style="display:inline">&#x1F5D1; Trash</h2>
+      <span style="color:var(--text-dim);margin-left:8px;font-size:12px">Items auto-delete after 30 days</span>
+    </div>`;
+  if (trashClips.length > 0) {
+    html += `<div class="project-detail-actions">
+      <button class="sb-btn-action" onclick="emptyTrash()" title="Permanently delete all trashed notes" style="color:var(--danger)">&#x1F5D1; Empty Trash</button>
+    </div>`;
+  }
+  html += `</div>`;
+
+  if (trashClips.length === 0) {
+    html += `<div class="empty"><div class="ico">&#x2705;</div>
+      <div class="empty-title">Trash is empty</div>
+      <div class="empty-sub">Deleted notes appear here for 30 days before being permanently removed</div></div>`;
+  } else {
+    trashClips.forEach((c) => {
+      const id = escAttr(c.id);
+      html += `<div class="clip trash-clip">`;
+      html += `<div class="clip-header">`;
+      html += `<span class="cat-badge" style="opacity:0.6">${esc(c.category)}</span>`;
+      if (c.projectName) html += `<span class="proj-badge" style="opacity:0.6">${esc(c.projectName)}</span>`;
+      html += `<div class="clip-actions">`;
+      html += `<span class="clip-time">${timeAgo(c.timestamp)}</span>`;
+      html += `<button class="sb-btn-action" onclick="restoreClip('${id}')" title="Restore this note" style="font-size:12px;padding:2px 8px">&#x21A9; Restore</button>`;
+      html += `<button class="del-btn" onclick="permanentDeleteClip('${id}')" title="Permanently delete">&#x2715;</button>`;
+      html += `</div></div>`;
+      if (c.comment) html += `<div class="comment">${esc(c.comment)}</div>`;
+      if (c.aiSummary) html += `<div class="ai-summary" style="opacity:0.6">${esc(c.aiSummary)}</div>`;
+      if (c.tags && c.tags.length) {
+        html += `<div class="tags" style="opacity:0.6">${c.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>`;
+      }
+      html += `</div>`;
+    });
+  }
+
+  el.innerHTML = html;
+  loadDiskImages(el);
+}
+
+let _aiSearchInFlight = false;
 async function doAiSearch() {
+  if (_aiSearchInFlight) return;
   const input = document.getElementById('searchInput');
   searchQuery = input ? input.value.trim() : '';
   if (!searchQuery) { clearSearch(); return; }
   const btn = document.getElementById('aiSearchBtn');
+  _aiSearchInFlight = true;
   if (btn) { btn.disabled = true; btn.textContent = '...'; }
   try {
     aiMatchedIds = await window.quickclip.aiSearch(searchQuery);
   } catch (e) {
     console.error('[AI] Search failed:', e);
   } finally {
+    _aiSearchInFlight = false;
     if (btn) { btn.disabled = false; btn.textContent = 'AI Search'; }
     renderContent();
   }
@@ -472,7 +631,7 @@ function renderProjectDetail(el) {
   const proj = projects.find((p) => p.id === selectedProjectId);
   if (!proj) { selectProject(null); return; }
 
-  const projectClips = clips.filter((c) => c.project_id === selectedProjectId);
+  let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
 
   let html = `<div class="project-detail-header">
     <div>
@@ -480,6 +639,7 @@ function renderProjectDetail(el) {
       <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)}</h2>
     </div>
     <div class="project-detail-actions">
+      <button class="sb-btn-action summarize-btn" onclick="showProjectSummary(${proj.id})" title="Generate a side-by-side summary of all notes">&#x2728; Summarize</button>
       <button class="sb-btn-action" onclick="editProject(${proj.id})">Edit</button>
       <button class="sb-btn-action danger" onclick="confirmDeleteProject(${proj.id})">Delete</button>
     </div>
@@ -502,13 +662,25 @@ function renderProjectDetail(el) {
       <div class="empty-title">No clips in this project</div>
       <div class="empty-sub">Assign clips from General Notes or capture new ones</div></div>`;
   } else {
-    html += projectClips.map((c) => renderClipCard(c, true)).join('');
+    try {
+      const tags = getAllKnownTags();
+      html += projectClips.map((c) => renderClipCard(c, true, tags)).join('');
+    } catch (e) {
+      html += `<div class="empty"><div class="empty-title">Render error: ${e.message}</div></div>`;
+    }
   }
 
   el.innerHTML = html;
+  loadDiskImages(el);
 }
 
+let _projectSearchTimer = null;
 function searchProject() {
+  clearTimeout(_projectSearchTimer);
+  _projectSearchTimer = setTimeout(_doSearchProject, 200);
+}
+
+function _doSearchProject() {
   const input = document.getElementById('projectSearchInput');
   if (!input) return;
   const q = input.value.trim().toLowerCase();
@@ -529,7 +701,7 @@ function searchProject() {
   }
 
   const clipListHtml = projectClips.length > 0
-    ? projectClips.map((c) => renderClipCard(c, true)).join('')
+    ? projectClips.map((c) => renderClipCard(c, true, getAllKnownTags())).join('')
     : `<div class="empty"><div class="empty-title">No matches</div></div>`;
 
   // Replace clip list only (find after search-bar)
@@ -541,11 +713,110 @@ function searchProject() {
   const wrapper = document.createElement('div');
   wrapper.innerHTML = clipListHtml;
   while (wrapper.firstChild) el.appendChild(wrapper.firstChild);
+  loadDiskImages(el);
 }
 
 function selectProject(id) {
   selectedProjectId = id;
   renderAll();
+}
+
+// ── Project Summary Panel ──
+
+async function showProjectSummary(projectId) {
+  const el = document.getElementById('mainArea');
+  const proj = projects.find((p) => p.id === projectId);
+  if (!proj) return;
+
+  // Show loading state
+  el.innerHTML = `<div class="project-detail-header">
+    <div>
+      <button class="back-btn" onclick="selectProject(${projectId})">&larr; Back to ${esc(proj.name)}</button>
+      <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)} — Summary</h2>
+    </div>
+  </div>
+  <div class="summary-loading"><span class="spinner">&#x2728;</span> Generating summaries&hellip;</div>`;
+
+  try {
+    const results = await window.quickclip.summarizeProject(projectId);
+    renderSummaryPanel(el, proj, results);
+    // Refresh clips in background since new summaries may have been saved
+    clips = await window.quickclip.getClips();
+  } catch (e) {
+    el.innerHTML += `<div class="empty"><div class="empty-title">Summarization failed</div><div class="empty-sub">${esc(e.message)}</div></div>`;
+  }
+}
+
+function renderSummaryPanel(el, proj, results) {
+  const withContent = results.filter((r) => r.comment || r.aiFixPrompt);
+  if (withContent.length === 0) {
+    el.innerHTML = `<div class="project-detail-header">
+      <div>
+        <button class="back-btn" onclick="selectProject(${proj.id})">&larr; Back to ${esc(proj.name)}</button>
+        <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)} — Summary</h2>
+      </div>
+    </div>
+    <div class="empty"><div class="empty-title">No notes to summarize</div></div>`;
+    return;
+  }
+
+  let html = `<div class="project-detail-header">
+    <div>
+      <button class="back-btn" onclick="selectProject(${proj.id})">&larr; Back to ${esc(proj.name)}</button>
+      <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)} — Summary</h2>
+    </div>
+    <div class="project-detail-actions">
+      <button class="sb-btn-action summarize-btn" onclick="copySummaryPanel()" title="Copy all notes and summaries to clipboard">&#x1F4CB; Copy All</button>
+    </div>
+  </div>`;
+
+  html += `<div class="summary-panel">`;
+  html += `<div class="summary-row summary-header-row">
+    <div class="summary-col-label">Original Note</div>
+    <div class="summary-col-label">AI Fix Prompt</div>
+  </div>`;
+
+  withContent.forEach((r) => {
+    const catBadge = r.category ? `<span class="cat-badge">${esc(r.category)}</span>` : '';
+    const tags = (r.tags && r.tags.length) ? `<div class="summary-tags">${r.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>` : '';
+    const sumCount = r.summarizeCount || 0;
+    const rowDarken = sumCount > 0 ? ` style="background: color-mix(in srgb, var(--bg-card), black ${Math.min(sumCount * 6, 30)}%)"` : '';
+    html += `<div class="summary-row"${rowDarken}>
+      <div class="summary-col summary-original">
+        <div class="summary-note-text">${esc(r.comment) || '<em>No note</em>'}</div>
+        <div class="summary-note-meta">${catBadge} ${timeAgo(r.timestamp)}${sumCount > 0 ? ` <span class="badge badge-summarized">&#x2728; ${sumCount}x</span>` : ''}</div>
+      </div>
+      <div class="summary-col summary-ai">
+        ${r.aiFixPrompt ? `<div class="summary-ai-text">${esc(r.aiFixPrompt)}</div>${tags}` : '<div class="summary-no-ai">No fix prompt generated</div>'}
+      </div>
+    </div>`;
+  });
+
+  html += `</div>`;
+  el.innerHTML = html;
+}
+
+function copySummaryPanel() {
+  const rows = document.querySelectorAll('.summary-row:not(.summary-header-row)');
+  if (!rows.length) return;
+
+  let text = '';
+  rows.forEach((row) => {
+    const original = row.querySelector('.summary-original .summary-note-text');
+    const ai = row.querySelector('.summary-ai-text');
+    const note = original ? original.textContent.trim() : '';
+    const prompt = ai ? ai.textContent.trim() : '(no prompt generated)';
+    text += `## Task\n${prompt}\n\nContext: ${note}\n\n---\n\n`;
+  });
+
+  navigator.clipboard.writeText(text.trim()).then(() => {
+    const btn = document.querySelector('.summarize-btn');
+    if (btn) {
+      const orig = btn.innerHTML;
+      btn.innerHTML = '&#x2713; Copied!';
+      setTimeout(() => { btn.innerHTML = orig; }, 1500);
+    }
+  });
 }
 
 // ── Project CRUD ──
@@ -967,25 +1238,62 @@ async function addCustomBlock() {
 //  CLIP CARD
 // =====================================================================
 
-function renderClipCard(c, inProject) {
+function getAllKnownTags() {
+  const tagSet = new Set();
+  for (const cl of clips) {
+    if (cl.tags && cl.tags.length) cl.tags.forEach(t => tagSet.add(t));
+  }
+  return Array.from(tagSet).sort();
+}
+
+function renderClipCard(c, inProject, allKnownTags) {
   const id = escAttr(c.id);
   const isActive = c.status === 'active';
+  const isCompleted = !!c.completedAt;
   const statusClass = isActive ? 'badge-active' : 'badge-parked';
   const statusLabel = isActive ? 'ACTIVE' : 'PARKED';
 
-  let html = `<div class="clip">`;
+  // Progressive darkening based on summarize count
+  const sumCount = c.summarizeCount || 0;
+  const darkenStyle = sumCount > 0 ? ` style="background: color-mix(in srgb, var(--bg-card), black ${Math.min(sumCount * 6, 30)}%)"` : '';
+
+  let html = `<div class="clip${isCompleted ? ' clip-completed' : ''}"${darkenStyle} data-testid="clip-card-${id}">`;
 
   // Header row
   html += `<div class="clip-hdr">`;
   html += `<div class="clip-meta">`;
-  html += `<span class="badge ${statusClass}" onclick="toggleStatus('${id}')" title="Click to toggle between Active and Parked">${statusLabel}</span>`;
+
+  if (isCompleted) {
+    html += `<span class="badge badge-completed" onclick="uncompleteClip('${id}')" title="Click to mark as incomplete">&#x2713; DONE</span>`;
+  } else {
+    html += `<span class="badge ${statusClass}" onclick="toggleStatus('${id}')" title="Click to toggle between Active and Parked">${statusLabel}</span>`;
+  }
+
   html += `<span class="cat-badge" title="Category — assigned by AI or manually">${esc(c.category)}</span>`;
   if (c.projectName && !inProject) {
     html += `<span class="proj-badge" style="border-color:${esc(c.projectColor || '#3b82f6')}">${esc(c.projectName)}</span>`;
   }
+  if (sumCount > 0) {
+    html += `<span class="badge badge-summarized" title="Summarized ${sumCount} time${sumCount > 1 ? 's' : ''}">&#x2728; ${sumCount}x</span>`;
+  }
   html += `</div>`;
   html += `<div class="clip-actions">`;
   html += `<span class="clip-time">${timeAgo(c.timestamp)}</span>`;
+
+  // Copy prompt button (if aiFixPrompt exists)
+  if (c.aiFixPrompt) {
+    html += `<button class="copy-prompt-btn" onclick="copyPrompt('${id}')" title="Copy AI fix prompt to clipboard">&#x1F4CB; Copy</button>`;
+  }
+
+  // Manual AI trigger (if has comment but no AI summary, or no aiFixPrompt)
+  if ((c.comment && !c.aiSummary) || (c.comment && !c.aiFixPrompt)) {
+    html += `<button class="ai-trigger-btn" onclick="retriggerAi('${id}')" title="Run AI categorization on this clip">&#x2728; AI</button>`;
+  }
+
+  // Complete button (only if not already complete)
+  if (!isCompleted) {
+    html += `<button class="complete-btn" onclick="showCompleteDialog('${id}')" title="Mark as complete" data-testid="clip-complete-btn">&#x2713;</button>`;
+  }
 
   // Move to project dropdown
   if (!inProject && projects.length > 0) {
@@ -1004,20 +1312,45 @@ function renderClipCard(c, inProject) {
   html += `</div></div>`;
 
   // Screenshot
-  if (c.image) {
+  if (c.image === '__on_disk__') {
+    html += `<img data-clip-id="${id}" class="img-loading" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse screenshot" />`;
+  } else if (c.image) {
     html += `<img src="${esc(c.image)}" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse screenshot" />`;
   }
 
   // Comment
   if (c.comment) html += `<div class="comment">${esc(c.comment)}</div>`;
 
-  // AI summary
-  if (c.aiSummary) html += `<div class="ai-summary" title="AI-generated summary">${esc(c.aiSummary)}</div>`;
+  // AI summary (filing label)
+  if (c.aiSummary) html += `<div class="ai-summary" title="AI-generated summary"><span class="ai-label">AI Summary</span> ${esc(c.aiSummary)}</div>`;
+
+  // AI fix prompt inline (actionable prompt for IDE injection)
+  if (c.aiFixPrompt) html += `<div class="ai-fix-prompt" title="AI-generated fix prompt — paste into your IDE's AI helper"><span class="ai-label">AI Prompt</span> ${esc(c.aiFixPrompt)}</div>`;
+
+  // Completed timestamp
+  if (isCompleted) {
+    html += `<div class="completed-stamp" title="Completed at ${esc(c.completedAt)}">&#x2713; Completed ${timeAgo(new Date(c.completedAt).getTime())}</div>`;
+  }
 
   // Tags
+  html += `<div class="tags-row">`;
   if (c.tags && c.tags.length) {
-    html += `<div class="tags">${c.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join('')}</div>`;
+    html += c.tags.map((t) => `<span class="tag">#${esc(t)}<button class="tag-remove" onclick="removeTag('${id}','${escAttr(t)}')" title="Remove tag">&times;</button></span>`).join('');
   }
+  html += `<button class="add-tag-btn" onclick="showTagInput('${id}')" title="Add a tag">+ Tag</button>`;
+  html += `</div>`;
+  html += `<div id="ti-${id}" style="display:none;margin-bottom:6px;gap:4px">`;
+  html += `<select class="tag-select" id="tsel-${id}" onchange="onTagSelect('${id}', this.value)">`;
+  html += `<option value="">Pick a tag...</option>`;
+  const currentTags = c.tags || [];
+  allKnownTags.forEach((t) => {
+    if (!currentTags.includes(t)) html += `<option value="${escAttr(t)}">#${esc(t)}</option>`;
+  });
+  html += `<option value="__new__">New tag...</option>`;
+  html += `</select>`;
+  html += `<input class="tag-input" id="tin-${id}" placeholder="new tag..." style="display:none" `
+    + `onkeydown="if(event.key==='Enter')addTag('${id}');if(event.key==='Escape')hideTagInput('${id}')" />`;
+  html += `</div>`;
 
   // Thread comments
   if (c.comments && c.comments.length) {
@@ -1038,6 +1371,19 @@ function renderClipCard(c, inProject) {
   return html;
 }
 
+// ── Lazy-load images stored on disk ──
+
+async function loadDiskImages(container) {
+  const imgs = container.querySelectorAll('img[data-clip-id]');
+  for (const img of imgs) {
+    const dataUrl = await window.quickclip.getClipImage(img.dataset.clipId);
+    if (dataUrl) {
+      img.src = dataUrl;
+      img.classList.remove('img-loading');
+    }
+  }
+}
+
 // ── Clip Actions ──
 
 async function toggleStatus(id) {
@@ -1049,10 +1395,73 @@ async function toggleStatus(id) {
   renderAll();
 }
 
+function showCompleteDialog(id) {
+  // Remove any existing dialog
+  const existing = document.getElementById('completeDialog');
+  if (existing) existing.remove();
+
+  const dialog = document.createElement('div');
+  dialog.id = 'completeDialog';
+  dialog.className = 'complete-dialog-overlay';
+  dialog.setAttribute('data-testid', 'complete-dialog');
+  dialog.innerHTML = `
+    <div class="complete-dialog">
+      <h3>Mark as Complete</h3>
+      <p>What would you like to do with this note?</p>
+      <div class="complete-dialog-actions">
+        <button class="complete-dialog-btn keep-btn" onclick="completeClip('${escAttr(id)}', false)" data-testid="complete-keep-btn">
+          <span class="complete-icon">&#x2713;</span>
+          <span class="complete-label">Complete</span>
+          <span class="complete-desc">Mark done, stays visible</span>
+        </button>
+        <button class="complete-dialog-btn archive-btn" onclick="completeClip('${escAttr(id)}', true)" data-testid="complete-trash-btn">
+          <span class="complete-icon">&#x1F5D1;</span>
+          <span class="complete-label">Trash</span>
+          <span class="complete-desc">Done &amp; moved to trash</span>
+        </button>
+      </div>
+      <button class="cancel-btn" onclick="document.getElementById('completeDialog').remove()">Cancel</button>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+}
+
+async function completeClip(id, archive) {
+  const dialog = document.getElementById('completeDialog');
+  if (dialog) dialog.remove();
+  await window.quickclip.completeClip(id, archive);
+  clips = await window.quickclip.getClips();
+  renderAll();
+}
+
+async function uncompleteClip(id) {
+  await window.quickclip.uncompleteClip(id);
+  clips = await window.quickclip.getClips();
+  renderAll();
+}
+
 async function deleteClip(id) {
   await window.quickclip.deleteClip(id);
   clips = clips.filter((c) => c.id !== id);
   renderAll();
+}
+
+async function copyPrompt(id) {
+  const clip = clips.find(c => c.id === id);
+  if (clip && clip.aiFixPrompt) {
+    await navigator.clipboard.writeText(clip.aiFixPrompt);
+  }
+}
+
+async function retriggerAi(id) {
+  const result = await window.quickclip.retriggerAi(id);
+  if (result) {
+    const idx = clips.findIndex(c => c.id === id);
+    if (idx !== -1) {
+      clips[idx] = { ...clips[idx], ...result };
+    }
+    renderAll();
+  }
 }
 
 async function moveToProject(clipId, projectId) {
@@ -1094,30 +1503,62 @@ async function addComment(id) {
   renderAll();
 }
 
-// ── AI Manual Categorize ──
+// ── Tag Management ──
 
-async function aiCategorize(clip) {
-  document.getElementById('aiBar').style.display = 'flex';
-  document.getElementById('aiBarMsg').textContent = 'AI categorizing...';
-  try {
-    const result = await window.quickclip.aiCategorize(clip.comment, clip.image);
-    if (!result) return;
-    const updates = {};
-    if (result.category && clip.category === 'Uncategorized') updates.category = result.category;
-    if (result.tags) updates.tags = result.tags;
-    if (result.summary) updates.aiSummary = result.summary;
-    if (result.url) updates.url = result.url;
-    if (result.project_id && !clip.project_id) updates.project_id = result.project_id;
-    if (Object.keys(updates).length) {
-      await window.quickclip.updateClip(clip.id, updates);
-      clips = await window.quickclip.getClips();
-      categories = await window.quickclip.getCategories();
-      projects = await window.quickclip.getProjects();
-      renderAll();
-    }
-  } catch (e) {
-    console.error('[AI] Categorize failed:', e);
-  } finally {
-    document.getElementById('aiBar').style.display = 'none';
-  }
+function showTagInput(id) {
+  const el = document.getElementById('ti-' + id);
+  if (el) { el.style.display = 'flex'; }
 }
+
+function hideTagInput(id) {
+  const el = document.getElementById('ti-' + id);
+  if (el) el.style.display = 'none';
+  const input = document.getElementById('tin-' + id);
+  if (input) { input.style.display = 'none'; input.value = ''; }
+  const sel = document.getElementById('tsel-' + id);
+  if (sel) sel.value = '';
+}
+
+async function onTagSelect(id, value) {
+  if (value === '__new__') {
+    const input = document.getElementById('tin-' + id);
+    input.style.display = 'block';
+    input.focus();
+    return;
+  }
+  if (!value) return;
+  const clip = clips.find((c) => c.id === id);
+  if (!clip) return;
+  if (!clip.tags) clip.tags = [];
+  if (!clip.tags.includes(value)) {
+    clip.tags.push(value);
+    await window.quickclip.updateClip(id, { tags: clip.tags });
+  }
+  hideTagInput(id);
+  renderAll();
+}
+
+async function addTag(id) {
+  const input = document.getElementById('tin-' + id);
+  const raw = input.value.trim().replace(/^#/, '').trim();
+  if (!raw) return;
+  const clip = clips.find((c) => c.id === id);
+  if (!clip) return;
+  if (!clip.tags) clip.tags = [];
+  if (clip.tags.includes(raw)) { input.value = ''; return; }
+  clip.tags.push(raw);
+  await window.quickclip.updateClip(id, { tags: clip.tags });
+  input.value = '';
+  hideTagInput(id);
+  renderAll();
+}
+
+async function removeTag(id, tag) {
+  const clip = clips.find((c) => c.id === id);
+  if (!clip || !clip.tags) return;
+  clip.tags = clip.tags.filter((t) => t !== tag);
+  await window.quickclip.updateClip(id, { tags: clip.tags });
+  renderAll();
+}
+
+// end of file

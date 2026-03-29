@@ -243,7 +243,7 @@ async function categorize(comment, categories, imageDataURL = null, projects = n
 
   const parts = [];
   if (imageDataURL) {
-    const base64 = imageDataURL.replace(/^data:image\/\w+;base64,/, '');
+    const base64 = imageDataURL.replace(/^data:image\/[^;]+;base64,/, '');
     parts.push({ inline_data: { mime_type: 'image/png', data: base64 } });
   }
   parts.push({ text: userText });
@@ -308,15 +308,24 @@ async function callGemini(systemInstruction, parts) {
     headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
   }
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts }],
-      systemInstruction: { parts: [{ text: systemInstruction }] },
-      generationConfig: GENERATION_CONFIG,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts }],
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        generationConfig: GENERATION_CONFIG,
+      }),
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const data = await res.json();
   if (data.error) {
@@ -325,7 +334,12 @@ async function callGemini(systemInstruction, parts) {
 
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
   const clean = text.replace(/```json|```/g, '').trim();
-  return JSON.parse(clean);
+  try {
+    return JSON.parse(clean);
+  } catch (e) {
+    console.error('[AI] Failed to parse response:', clean.slice(0, 200));
+    return null;
+  }
 }
 
 // ── Prompt Composition ──
@@ -391,7 +405,37 @@ function estimateTokens(text) {
   return Math.ceil(text.length / 4);
 }
 
+const SUMMARIZE_SYSTEM = `You are the summarization backend for Sciurus, a knowledge-capture tool.
+You receive a list of notes from a single project. Each note has an ID and text written by the user.
+For each note, generate an actionable AI prompt that another AI (like Copilot or ChatGPT) could use
+to fix, implement, or resolve the issue described in the note. The prompt should:
+- State the problem or task clearly in imperative form (e.g. "Fix the…", "Implement…", "Refactor…")
+- Include relevant technical context: file names, function names, error messages, tools, or libraries mentioned
+- Be specific enough to act on without seeing the original screenshot
+- If the note describes a working solution or reference, frame it as "Apply this pattern: …" or "Use this approach: …"
+- Keep it to 1-3 sentences — concise but complete enough for an AI to start working immediately
+
+Return ONLY a valid JSON array. No markdown fences, no explanation.
+Each element: { "id": "string — the note ID", "summary": "string — the actionable AI prompt" }
+If a note is empty or unintelligible, return a fallback like "Review this note — insufficient context to generate a fix prompt."`;
+
+async function summarizeNotes(notes) {
+  if (!isEnabled() || !notes.length) return [];
+
+  const input = notes.map((n) => ({ id: n.id, note: n.comment || '' }));
+  try {
+    const result = await callGemini(SUMMARIZE_SYSTEM, [
+      { text: JSON.stringify(input) },
+    ]);
+    if (Array.isArray(result)) return result;
+    return [];
+  } catch (e) {
+    console.error('[AI] Summarize notes error:', e.message);
+    return [];
+  }
+}
+
 module.exports = {
-  init, isEnabled, categorize, search,
+  init, isEnabled, categorize, search, summarizeNotes,
   getCategorizePrompt, getPromptBlocks, setPromptBlocks, resetPromptBlocks, estimateTokens,
 };

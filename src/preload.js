@@ -14,8 +14,14 @@ contextBridge.exposeInMainWorld('quickclip', {
   saveClip: (clip) => ipcRenderer.invoke('save-clip', clip),
   updateClip: (id, updates) => ipcRenderer.invoke('update-clip', id, updates),
   deleteClip: (id) => ipcRenderer.invoke('delete-clip', id),
+  getTrash: () => ipcRenderer.invoke('get-trash'),
+  restoreClip: (id) => ipcRenderer.invoke('restore-clip', id),
+  permanentDeleteClip: (id) => ipcRenderer.invoke('permanent-delete-clip', id),
+  emptyTrash: () => ipcRenderer.invoke('empty-trash'),
   getClipImage: (clipId) => ipcRenderer.invoke('get-clip-image', clipId),
   assignClipToProject: (clipId, projectId) => ipcRenderer.invoke('assign-clip-to-project', clipId, projectId),
+  completeClip: (clipId, archive) => ipcRenderer.invoke('complete-clip', clipId, archive),
+  uncompleteClip: (clipId) => ipcRenderer.invoke('uncomplete-clip', clipId),
 
   // Categories
   getCategories: () => ipcRenderer.invoke('get-categories'),
@@ -35,11 +41,15 @@ contextBridge.exposeInMainWorld('quickclip', {
   // AI
   aiCategorize: (comment, imageData) => ipcRenderer.invoke('ai-categorize', comment, imageData),
   aiSearch: (query) => ipcRenderer.invoke('ai-search', query),
+  summarizeProject: (projectId) => ipcRenderer.invoke('summarize-project', projectId),
   hasApiKey: () => ipcRenderer.invoke('has-api-key'),
   getPromptBlocks: () => ipcRenderer.invoke('get-prompt-blocks'),
   savePromptBlocks: (enabled, custom) => ipcRenderer.invoke('save-prompt-blocks', enabled, custom),
   resetPromptBlocks: () => ipcRenderer.invoke('reset-prompt-blocks'),
   addCustomBlock: (label, text) => ipcRenderer.invoke('add-custom-block', label, text),
+
+  // AI retrigger
+  retriggerAi: (clipId) => ipcRenderer.invoke('retrigger-ai', clipId),
 
   // App info
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
