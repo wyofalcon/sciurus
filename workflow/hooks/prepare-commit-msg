@@ -1,0 +1,140 @@
+#!/bin/bash
+# prepare-commit-msg — Append builder's last summary to the commit message body
+#
+# When the builder (Gemini/Claude) commits, this hook reads the rolling
+# builder-output.log, extracts the last clean prose block (the model's
+# natural-language summary of what it just did), and appends it as an
+# extended body below the subject line.
+#
+# Copies: .githooks/prepare-commit-msg (versioned)  +  .git/hooks/prepare-commit-msg (active)
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"   # message | template | merge | squash | commit (amend)
+
+# Only enrich normal commits — skip merge, squash, amend
+if [[ "$COMMIT_SOURCE" == "merge" || "$COMMIT_SOURCE" == "squash" || "$COMMIT_SOURCE" == "commit" ]]; then
+    exit 0
+fi
+
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+# ── Auto-skip during git maintenance operations ──────────────────────────────
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
+for state_file in rebase-merge rebase-apply CHERRY_PICK_HEAD BISECT_LOG; do
+    [ -e "$GIT_DIR/$state_file" ] && exit 0
+done
+# Skip on detached HEAD (common during repo surgery)
+[ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "HEAD" ] && exit 0
+# Skip if maintenance mode flag exists
+[ -f "$PROJECT_ROOT/.ai-workflow/context/MAINTENANCE_MODE" ] && exit 0
+BUILDER_LOG="$PROJECT_ROOT/.ai-workflow/context/builder-output.log"
+
+# Nothing to do if log doesn't exist or is empty
+[ -s "$BUILDER_LOG" ] || exit 0
+
+python3 - "$COMMIT_MSG_FILE" "$BUILDER_LOG" <<'PYEOF'
+import sys, re
+
+commit_file = sys.argv[1]
+log_file = sys.argv[2]
+
+# ── Read & strip ANSI escape codes from builder log ──────────────────────────
+ANSI_RE = re.compile(r'\x1b\[[0-9;]*[mGKHF]|\x1b\][^\x07]*\x07|\x1b[()][AB012]')
+with open(log_file, 'r', errors='replace') as f:
+    raw_lines = f.readlines()
+
+lines = [ANSI_RE.sub('', l).rstrip() for l in raw_lines]
+
+# ── Prose-line classifier ─────────────────────────────────────────────────────
+def is_prose(line):
+    s = line.strip()
+    if len(s) < 18 or len(s) > 420:
+        return False
+    # Skip JSON / code-heavy lines
+    special = sum(1 for c in s if c in '{}[]|<>#\\')
+    if special > len(s) * 0.14:
+        return False
+    # Skip lines starting with non-prose indicators
+    if re.match(r'^[\s]*[{}\[\]$>|╭╮╯╰│✦✗⚠️⛔✅🤖🔧📝🚀~]', s):
+        return False
+    # Skip separator lines
+    if re.match(r'^[=\-─━_·.]{4,}$', s):
+        return False
+    # Skip lines that look like file paths, URLs, or git hashes
+    if re.match(r'^(/[\w./\-]+|https?://|[0-9a-f]{7,40}$)', s):
+        return False
+    # Skip shell prompt patterns
+    if re.search(r'\$\s+\w|^\s*\$\s', s):
+        return False
+    # Must start with letter, digit, quote, or opening paren
+    if not re.match(r'^[A-Za-z0-9\'"(]', s):
+        return False
+    return True
+
+# ── Find the LAST prose section (min 2 prose lines) ────────────────────────────
+# Blank lines are transparent — only non-prose non-blank lines end a section.
+tail = lines[-300:]
+blocks = []
+current_block = []   # holds (line, is_blank) tuples while scanning
+
+def flush(block):
+    prose_only = [l for l in block if l.strip()]
+    if len(prose_only) >= 2:
+        blocks.append(prose_only)
+
+for line in reversed(tail):
+    s = line.strip()
+    if s == '':
+        # Blank — keep in current block if we already have prose, else ignore
+        if current_block:
+            current_block.append(line)
+    elif is_prose(line):
+        current_block.append(line.strip())
+    else:
+        # Non-prose non-blank line — ends the current section
+        flush(current_block)
+        current_block = []
+
+flush(current_block)
+
+# Reverse each block (we built them backwards)
+blocks = [list(reversed(b)) for b in blocks]
+
+if not blocks:
+    sys.exit(0)
+
+# Take the most recent block, cap at 35 lines
+# Trim leading/trailing blank lines from the best block
+best = blocks[0]
+while best and not best[0].strip(): best.pop(0)
+while best and not best[-1].strip(): best.pop()
+summary_lines = best[:35]
+summary = '\n'.join(summary_lines)
+
+# ── Read existing commit message ──────────────────────────────────────────────
+with open(commit_file, 'r') as f:
+    existing = f.read()
+
+# If the summary is already in there (re-run), skip
+if summary_lines[0][:40] in existing:
+    sys.exit(0)
+
+# ── Append summary as extended body ──────────────────────────────────────────
+# Keep the subject line the builder wrote; add a blank line then the summary
+subject_end = existing.find('\n')
+if subject_end == -1:
+    new_msg = existing.strip() + '\n\n' + summary + '\n'
+else:
+    subject = existing[:subject_end]
+    rest = existing[subject_end:].lstrip('\n')
+    if rest.strip():
+        # Already has a body — append after existing body
+        new_msg = subject + '\n\n' + rest.rstrip('\n') + '\n\n' + summary + '\n'
+    else:
+        new_msg = subject + '\n\n' + summary + '\n'
+
+with open(commit_file, 'w') as f:
+    f.write(new_msg)
+
+print(f"[prepare-commit-msg] Appended builder summary ({len(summary_lines)} lines) to commit message", flush=True)
+PYEOF

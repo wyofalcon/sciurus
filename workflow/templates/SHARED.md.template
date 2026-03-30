@@ -1,0 +1,75 @@
+# Shared Project Conventions
+
+> All agents (Architect, Builder, Reviewer, Screener) follow these rules.
+
+## Session Protocol
+
+Before every task:
+
+```bash
+cat .ai-workflow/context/SESSION.md && git log --oneline -5
+```
+
+SESSION.md is auto-maintained by the post-commit hook — never edit it manually.
+
+## Branch Model
+
+```
+feature/your-task  →  staging (PR)  →  main (PR, triggers prod deploy)
+```
+
+- Always branch off `staging`: `git checkout -b feature/your-task origin/staging`
+- Never commit directly to `staging` or `main`
+- Never push — the Architect handles PRs and pushes
+
+## Architecture
+
+<!-- Replace with your project's stack -->
+- **Frontend:** `{{FRONTEND_DIR}}/` — {{FRONTEND_STACK}}
+- **Backend:** `{{BACKEND_DIR}}/` — {{BACKEND_STACK}}
+- **AI:** {{AI_STACK}}
+- **Infra:** {{INFRA_STACK}}
+
+## Key Files
+
+<!-- Replace with your project's key files -->
+| Purpose | File |
+| ------- | ---- |
+| {{PURPOSE_1}} | `{{FILE_1}}` |
+| {{PURPOSE_2}} | `{{FILE_2}}` |
+| DB schema | `{{SCHEMA_FILE}}` |
+
+## Error Handling
+
+<!-- Replace with your project's error handling pattern -->
+```
+{{ERROR_HANDLING_PATTERN}}
+```
+
+## Auth
+
+<!-- Replace with your project's auth approach -->
+- **Frontend:** {{FRONTEND_AUTH}}
+- **Backend:** {{BACKEND_AUTH}}
+
+## Conventions
+
+- No `console.log` in production code — pre-commit hook warns
+- All interactive UI elements need `data-testid` attributes (kebab-case: `{component}-{element}-{variant}`)
+<!-- Add project-specific conventions below -->
+
+## Dev Commands
+
+```bash
+{{DEV_START_CMD}}                    # Start everything
+{{DEV_FRONTEND_CMD}}                 # Frontend dev server
+{{DEV_BACKEND_CMD}}                  # Backend dev server
+{{DEV_TEST_CMD}}                     # Run tests
+{{DEV_BUILD_CMD}}                    # Build / lint check
+```
+
+## Gotchas
+
+<!-- List project-specific gotchas -->
+1. {{GOTCHA_1}}
+2. {{GOTCHA_2}}
