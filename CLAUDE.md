@@ -33,6 +33,12 @@ docker compose up -d   # Start PostgreSQL 16 on port 5433
 docker compose down    # Stop
 ```
 
+**MCP Server:**
+```bash
+cd mcp-server && npm install   # Install MCP server deps (separate package)
+node mcp-server/index.js       # Run standalone (stdio transport)
+```
+
 No test suite exists. Dev testing is done via `npm run dev` + DevTools console.
 
 ## Architecture
@@ -44,13 +50,21 @@ Renderer (3 windows)          Main Process (src/main.js)
   setup.html  — first-run wizard  │─ Window metadata capture
          ↕ IPC (preload.js)       │─ IPC handlers + event emitters
                                    │─ Background AI tasks
+                                   │─ HTTP API server (localhost:7277)
                                    ↓
                               Module Layer
                                 db.js → db-pg.js | db-sqlite.js
                                 ai.js → Gemini 2.5 Flash (Vertex or API key)
                                 rules.js → 7-strategy categorization chain
+                                api-server.js → REST API for external tools
                                 window-info.js → Win32/xdotool/gdbus
                                 images.js → disk storage + compression
+
+MCP Server (mcp-server/)       Workflow System (workflow/)
+  Separate Node process          Multi-agent dev orchestration
+  stdio transport for            Architect/Builder/Reviewer/Screener roles
+    Claude Code / Gemini CLI     tmux-based, git hooks, dashboards
+  Calls HTTP API ↑               Templates + scripts for agent instructions
 ```
 
 ### Key Data Flow
@@ -68,6 +82,26 @@ All renderer↔main communication goes through `preload.js` which exposes `windo
 - **`ipcMain.handle` / `ipcRenderer.invoke`** — used for all request/response calls (clips, projects, settings, AI)
 - **`ipcMain.on` / `ipcRenderer.send`** — used for fire-and-forget window controls (`close-capture`, `hide-main`, `open-capture`)
 - **`webContents.send`** — main→renderer push events (`clips-changed`, `projects-changed`, `new-screenshot`)
+
+### Local HTTP API (`src/api-server.js`)
+
+REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatically by main.js after DB/AI init. Mirrors IPC handlers so external tools can access Sciurus.
+
+- **Port:** `SCIURUS_API_PORT` env var, default `7277`
+- **Endpoints:** `/api/health`, `/api/clips`, `/api/clips/:id`, `/api/projects`, `/api/categories`, `/api/settings`, `/api/ai/search`, `/api/ai/summarize`
+- **Methods:** GET (list/read), POST (create), PATCH (update), DELETE (soft-delete/permanent)
+- **Route matching:** custom `matchRoute()` with `:param` placeholders — no Express dependency
+- New API endpoints must mirror the IPC handler logic (rules, sanitization, audit entries, AI triggers)
+
+### MCP Server (`mcp-server/`)
+
+Separate Node.js process (stdio transport) that bridges AI IDE agents to Sciurus via the HTTP API. Has its own `package.json` with `@modelcontextprotocol/sdk` dependency.
+
+**Tool categories:**
+- **Knowledge tools** (`clip_*`, `project_*`, `category_list`, `sciurus_health`) — proxy to HTTP API
+- **Workflow tools** (`session_context`, `session_read`, `git_status`) — run locally via `child_process`
+
+**Container-aware:** auto-detects devcontainers/Codespaces and uses `host.docker.internal` to reach the Electron app on the host.
 
 ### Database Layer
 
@@ -112,6 +146,113 @@ Rules run first (instant). If AI is enabled, it runs async in background — enr
 
 In-memory array (max 200 entries) persisted to DB settings key `audit_log`. Tracks clip create/update/delete/AI actions. Use `addAuditEntry(action, detail)` in main.js when adding new operations.
 
+## Workflow System
+
+Two-layer structure: `workflow/` (generic templates + Linux scripts from ai-dev-workflow repo) and `.ai-workflow/` (Sciurus-compiled instructions + Windows-adapted scripts).
+
+### Runtime: `.ai-workflow/`
+
+```
+.ai-workflow/
+  instructions/   — Compiled role files (SHARED, ARCHITECT, BUILDER, REVIEWER, SCREENER)
+  context/        — SESSION.md, RELAY_MODE, AUDIT_WATCH_MODE, prompt tracker log
+  scripts/        — Windows/Git Bash scripts (ensure-workflow, show-status, prompt-tracker, etc.)
+  config/         — (reserved for future project-specific config)
+```
+
+**Quick commands (Git Bash):**
+```bash
+bash .ai-workflow/scripts/ensure-workflow.sh           # Health check
+bash .ai-workflow/scripts/show-status.sh               # Workflow status
+bash .ai-workflow/scripts/show-status.sh compact       # One-line status
+bash .ai-workflow/scripts/compose-instructions.sh builder  # Dump builder instructions
+bash .ai-workflow/scripts/prompt-tracker.sh add "scope" "description"  # Track a prompt
+```
+
+### Templates: `workflow/`
+
+Generic templates and Linux-native scripts (from `wyofalcon/ai-dev-workflow`). Not used directly on Windows — compiled versions live in `.ai-workflow/instructions/`.
+
+### Agent Roles
+
+| Role | Model | Purpose |
+|------|-------|---------|
+| **Architect** | Claude Sonnet 4.6 | Orchestrates workflow, refines prompts, manages git/PRs. Does NOT write app code. |
+| **Builder** | Claude Opus 4.6 | Writes all application code. Receives refined prompts from Architect. |
+| **Reviewer** | Gemini 3.1 Pro | Audits diffs for quality/security. Returns structured JSON verdicts. |
+| **Screener** | Gemini 2.0 Flash | Pre-commit AI analysis. |
+
+**Routing convention (Architect):**
+- `!message` — route to Builder (refine prompt first)
+- `!!message` — direct-to-builder shortcut (skip refinement)
+- `?message` — workflow config change (Architect handles directly)
+- No prefix — Architect handles directly (questions, reviews, git ops)
+
+### Git Hooks
+
+- **`prepare-commit-msg`** — auto-appends builder summary to commit messages (reads `builder-output.log`). Installed at `.git/hooks/`, source at `workflow/hooks/`.
+
+### Windows Notes
+
+- All `.ai-workflow/scripts/` are Git Bash compatible — no tmux, no inotifywait
+- `workflow/scripts/` contains the original Linux/tmux versions (audit-watch, dashboards, tmux launchers) — these require WSL
+- The `prompt-tracker.sh` uses `TZ=America/Chicago` for Central Time prompt IDs
+
+## Component Labels
+
+Use these labels when discussing parts of the system. They are the canonical shorthand.
+
+**App layers:**
+
+| Label | Component | Location |
+|-------|-----------|----------|
+| `main` | Electron main process | `src/main.js` |
+| `viewer` | Notes viewer window | `renderer/index.*` |
+| `capture` | Screenshot capture popup | `renderer/capture.*` |
+| `wizard` | First-run setup window | `renderer/setup.*` |
+| `preload` | IPC context bridge | `src/preload.js` |
+
+**Modules:**
+
+| Label | Component | Location |
+|-------|-----------|----------|
+| `db` | Database switcher | `src/db.js` |
+| `db-pg` | PostgreSQL backend | `src/db-pg.js` |
+| `db-sqlite` | SQLite backend | `src/db-sqlite.js` |
+| `ai` | Gemini AI module | `src/ai.js` |
+| `rules` | Categorization engine | `src/rules.js` |
+| `wininfo` | Window metadata capture | `src/window-info.js` |
+| `images` | Disk image storage | `src/images.js` |
+
+**External interfaces:**
+
+| Label | Component | Location |
+|-------|-----------|----------|
+| `api` | Local HTTP REST server | `src/api-server.js` |
+| `mcp` | MCP server (stdio bridge) | `mcp-server/index.js` |
+
+**Workflow roles:**
+
+| Label | Role | Model |
+|-------|------|-------|
+| `architect` | Orchestrator, prompt refiner, git ops | Sonnet 4.6 |
+| `builder` | Writes all app code | Opus 4.6 |
+| `reviewer` | Diff auditor (JSON verdicts) | Gemini 3.1 Pro |
+| `screener` | Pre-commit analysis | Gemini 2.0 Flash |
+
+**Data concepts:**
+
+| Label | What |
+|-------|------|
+| `clip` | Captured note (screenshot + comment + metadata) |
+| `project` | Grouping container for clips (with repo_path for auto-match) |
+| `category` | Single-label classification (e.g. "Dev Tools", "Web") |
+| `tag` | Multi-label keywords on a clip |
+| `fix-prompt` | AI-generated actionable prompt per clip (`aiFixPrompt`) |
+| `summary` | AI-generated filing label per clip (`aiSummary`) |
+| `audit` | Action log entry (create/update/delete/AI) |
+| `rule` | Window rule for pattern-based categorization |
+
 ## Key Conventions
 
 - No npm deps for crypto, fetch, or auth — uses Node.js/Electron native APIs
@@ -122,6 +263,7 @@ In-memory array (max 200 entries) persisted to DB settings key `audit_log`. Trac
 - User input sanitized via `sanitizeUpdates()` allowlist (`ALLOWED_CLIP_FIELDS` in main.js) before DB writes
 - `.env` for configuration (see `.env.example`), `credentials.json` for Vertex AI (both git-ignored)
 - `notifyMainWindow(channel, data)` pushes IPC events to the renderer — use this after any state change
+- When adding new features accessible externally, add endpoints to both the IPC handlers (main.js) and the HTTP API (api-server.js), then add MCP tool definitions in `mcp-server/index.js`
 
 ## Cross-Platform Window Capture
 
