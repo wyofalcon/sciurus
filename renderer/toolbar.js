@@ -21,9 +21,35 @@ async function loadProjectName() {
 
 // ── Draw Mode ──
 
-function enterDraw(color) {
-  window.quickclip.enterDrawMode(color);
+let drawModeActive = false;
+let activeDrawColor = null;
+
+function switchColor(color) {
+  activeDrawColor = color;
+  updateColorDots();
+  if (drawModeActive) {
+    // Overlay already open — just switch color
+    window.quickclip.enterDrawMode(color);
+  } else {
+    drawModeActive = true;
+    window.quickclip.enterDrawMode(color);
+  }
 }
+
+function updateColorDots() {
+  document.querySelectorAll('.dot').forEach((dot) => dot.classList.remove('active'));
+  if (activeDrawColor) {
+    const dot = document.querySelector('.dot-' + activeDrawColor);
+    if (dot) dot.classList.add('active');
+  }
+}
+
+// Listen for draw mode exit (overlay closed via Esc/right-click)
+window.quickclip.onDrawModeExited(() => {
+  drawModeActive = false;
+  activeDrawColor = null;
+  updateColorDots();
+});
 
 // ── Actions ──
 
