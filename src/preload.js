@@ -77,9 +77,12 @@ contextBridge.exposeInMainWorld('quickclip', {
   restoreToolbar: () => ipcRenderer.send('restore-toolbar'),
   closeToolbar: () => ipcRenderer.send('close-toolbar'),
 
+  snippetCaptured: (dataUrl) => ipcRenderer.invoke('snippet-captured', dataUrl),
+
   // Overlay events (main → renderer)
   onColorChange: (cb) => ipcRenderer.on('set-color', (_, color) => cb(color)),
   onEnterRegionSelect: (cb) => ipcRenderer.on('enter-region-select', (_, screenshotDataUrl) => cb(screenshotDataUrl)),
+  onDrawModeExited: (cb) => ipcRenderer.on('draw-mode-exited', () => cb()),
 
   // Events
   onClipsChanged: (cb) => ipcRenderer.on('clips-changed', () => cb()),
