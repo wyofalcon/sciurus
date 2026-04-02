@@ -319,6 +319,7 @@ function createOverlayWindow() {
 
 function destroyOverlayWindow() {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.removeAllListeners('closed');
     overlayWindow.destroy();
     overlayWindow = null;
   }
@@ -392,6 +393,10 @@ ipcMain.handle('take-snippet', async () => {
 });
 
 ipcMain.handle('snippet-captured', (_, dataUrl) => {
+  // Notify toolbar that draw mode ended
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.webContents.send('draw-mode-exited');
+  }
   // Destroy the overlay
   destroyOverlayWindow();
 

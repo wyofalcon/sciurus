@@ -10,6 +10,7 @@ const COLORS = {
 
 let activeColor = 'red';
 let isDrawing = false;
+let hasDrawn = false; // Track if any drawing occurred (avoids full pixel scan)
 let isRegionMode = false;
 let regionStart = null;
 let regionRect = null;
@@ -21,12 +22,9 @@ let compositedImage = null; // Cached Image for region select redraws
 const drawCanvas = document.getElementById('drawCanvas');
 const drawCtx = drawCanvas.getContext('2d');
 
-function resizeDrawCanvas() {
-  drawCanvas.width = window.innerWidth;
-  drawCanvas.height = window.innerHeight;
-}
-resizeDrawCanvas();
-window.addEventListener('resize', resizeDrawCanvas);
+// Set initial canvas size (no resize listener — overlay is always fullscreen)
+drawCanvas.width = window.innerWidth;
+drawCanvas.height = window.innerHeight;
 
 function setPenStyle() {
   drawCtx.strokeStyle = COLORS[activeColor] || COLORS.red;
@@ -45,6 +43,7 @@ drawCanvas.addEventListener('mousedown', (e) => {
     return;
   }
   isDrawing = true;
+  hasDrawn = true;
   setPenStyle();
   drawCtx.beginPath();
   drawCtx.moveTo(e.clientX, e.clientY);
@@ -147,11 +146,7 @@ function exitRegionMode() {
 }
 
 function isCanvasEmpty() {
-  const pixels = drawCtx.getImageData(0, 0, drawCanvas.width, drawCanvas.height).data;
-  for (let i = 3; i < pixels.length; i += 4) {
-    if (pixels[i] > 0) return false;
-  }
-  return true;
+  return !hasDrawn;
 }
 
 // ── Region Drag ──
