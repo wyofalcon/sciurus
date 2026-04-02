@@ -7,7 +7,7 @@ delete process.env.ELECTRON_RUN_AS_NODE;
 process.stdout?.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
 process.stderr?.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
 
-const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, clipboard, nativeImage, globalShortcut, ipcMain, screen, dialog, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const db = require('./db');
@@ -63,6 +63,9 @@ let tray = null;
 let mainWindow = null;
 let captureWindow = null;
 let setupWindow = null;
+let toolbarWindow = null;
+let overlayWindow = null;
+let preOverlayWindowMeta = null; // Window metadata captured before overlay opens
 let clipboardWatcher = null;
 let lastClipHash = null;
 let watcherPaused = false;
@@ -185,6 +188,94 @@ function createCaptureWindow(imageDataURL, windowMeta = null) {
   captureWindow.on('closed', () => { captureWindow = null; });
 }
 
+// ── Annotation Toolbar ──
+
+async function createToolbarWindow() {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.show();
+    toolbarWindow.focus();
+    return;
+  }
+  const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
+  const tbWidth = 450;
+  const tbHeight = 44;
+  // Default position: top-center of screen
+  let x = Math.round((screenW - tbWidth) / 2);
+  let y = 10;
+  // Restore saved position if available
+  try {
+    const savedPos = await db.getSetting('toolbar_position');
+    if (savedPos && typeof savedPos.x === 'number' && typeof savedPos.y === 'number') {
+      x = savedPos.x;
+      y = savedPos.y;
+    }
+  } catch {}
+  toolbarWindow = new BrowserWindow({
+    width: tbWidth, height: tbHeight,
+    x, y,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  toolbarWindow.loadFile(path.join(__dirname, '..', 'renderer', 'toolbar.html'));
+  toolbarWindow.setAlwaysOnTop(true, 'floating');
+
+  // Save position when toolbar is moved
+  toolbarWindow.on('moved', () => {
+    if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+      const [px, py] = toolbarWindow.getPosition();
+      db.saveSetting('toolbar_position', { x: px, y: py }).catch(() => {});
+    }
+  });
+
+  toolbarWindow.on('closed', () => { toolbarWindow = null; });
+}
+
+ipcMain.on('show-main', () => {
+  if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
+});
+
+ipcMain.on('minimize-toolbar', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.setSize(40, 40);
+    toolbarWindow.setResizable(false);
+  }
+});
+
+ipcMain.on('restore-toolbar', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.setSize(450, 44);
+    toolbarWindow.setResizable(false);
+  }
+});
+
+ipcMain.on('close-toolbar', () => {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.hide();
+  }
+});
+
+ipcMain.handle('get-toolbar-project', async () => {
+  // Read the project name from package.json in the working directory
+  // (the project the workflow is attached to)
+  const pkgPath = path.join(__dirname, '..', 'package.json');
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return pkg.productName || pkg.name || null;
+  } catch {
+    return null;
+  }
+});
+
 // ── Clipboard Watcher ──
 
 function startClipboardWatcher() {
@@ -214,6 +305,7 @@ function createTray() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open Sciurus', click: () => { mainWindow.show(); mainWindow.focus(); } },
     { label: 'Quick Capture', click: () => createCaptureWindow(null) },
+    { label: 'Show Toolbar', click: () => createToolbarWindow() },
     { type: 'separator' },
     { label: 'Pause Watcher', type: 'checkbox', checked: false, click: (item) => {
       watcherPaused = item.checked;
@@ -356,6 +448,16 @@ ipcMain.handle('save-clip', async (_, clip) => {
 // Load image on demand from disk
 ipcMain.handle('get-clip-image', (_, clipId) => {
   return images.loadImage(clipId);
+});
+
+// Copy a clip's image to the system clipboard
+ipcMain.handle('copy-image-to-clipboard', (_, clipId) => {
+  const dataUrl = images.loadImage(clipId);
+  if (!dataUrl) return false;
+  const img = nativeImage.createFromDataURL(dataUrl);
+  if (img.isEmpty()) return false;
+  clipboard.writeImage(img);
+  return true;
 });
 
 ipcMain.handle('update-clip', async (_, id, updates) => {
@@ -658,6 +760,26 @@ ipcMain.handle('get-workflow-status', async () => {
   };
 });
 
+ipcMain.handle('toggle-relay-mode', async () => {
+  const contextDir = path.join(__dirname, '..', '.ai-workflow', 'context');
+  const file = path.join(contextDir, 'RELAY_MODE');
+  let current = 'review';
+  try { current = fs.readFileSync(file, 'utf8').trim(); } catch {}
+  const next = current === 'auto' ? 'review' : 'auto';
+  fs.writeFileSync(file, next, 'utf8');
+  return next;
+});
+
+ipcMain.handle('toggle-audit-watch', async () => {
+  const contextDir = path.join(__dirname, '..', '.ai-workflow', 'context');
+  const file = path.join(contextDir, 'AUDIT_WATCH_MODE');
+  let current = 'off';
+  try { current = fs.readFileSync(file, 'utf8').trim(); } catch {}
+  const next = current === 'on' ? 'off' : 'on';
+  fs.writeFileSync(file, next, 'utf8');
+  return next;
+});
+
 ipcMain.handle('get-workflow-changelog', async () => {
   const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'CHANGELOG.md');
   try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
@@ -673,6 +795,11 @@ ipcMain.handle('get-workflow-prompts', async () => {
       return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3], type: parts[4] || 'CRAFTED', parentId: parts[5] || null };
     }).reverse();
   } catch { return []; }
+});
+
+ipcMain.handle('get-workflow-audits', async () => {
+  const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'AUDIT_LOG.md');
+  try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
 });
 
 // ── IPC Handlers: Window Controls ──
@@ -857,6 +984,7 @@ async function launchMainApp() {
   mainWindow.focus();
 
   startClipboardWatcher();
+  createToolbarWindow();
   ai.init();
 
   // Load saved prompt block config from DB
@@ -916,5 +1044,7 @@ app.on('window-all-closed', (e) => e.preventDefault());
 app.on('will-quit', async () => {
   globalShortcut.unregisterAll();
   if (clipboardWatcher) clearInterval(clipboardWatcher);
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) toolbarWindow.destroy();
+  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy();
   await db.close();
 });
