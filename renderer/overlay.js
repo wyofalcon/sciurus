@@ -14,6 +14,7 @@ let isRegionMode = false;
 let regionStart = null;
 let regionRect = null;
 let screenshotDataUrl = null; // Set when entering region-select mode
+let compositedImage = null; // Cached Image for region select redraws
 
 // ── Drawing Canvas ──
 
@@ -106,20 +107,28 @@ function enterRegionMode() {
   regionCanvas.width = window.innerWidth;
   regionCanvas.height = window.innerHeight;
 
-  // Draw the screenshot + annotations composited as the background
   const img = new Image();
   img.onload = () => {
-    // Draw screenshot
-    regionCtx.drawImage(img, 0, 0, regionCanvas.width, regionCanvas.height);
-    // Draw annotations on top
-    regionCtx.drawImage(drawCanvas, 0, 0);
-    // Apply dark scrim
-    regionCtx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-    regionCtx.fillRect(0, 0, regionCanvas.width, regionCanvas.height);
+    // Create a composited offscreen canvas (screenshot + annotations)
+    const offscreen = document.createElement('canvas');
+    offscreen.width = regionCanvas.width;
+    offscreen.height = regionCanvas.height;
+    const offCtx = offscreen.getContext('2d');
+    offCtx.drawImage(img, 0, 0, offscreen.width, offscreen.height);
+    offCtx.drawImage(drawCanvas, 0, 0);
 
-    // Hide the draw canvas, show region UI
-    drawCanvas.style.display = 'none';
-    regionUI.classList.remove('hidden');
+    // Cache as an image for fast redraws
+    compositedImage = new Image();
+    compositedImage.onload = () => {
+      // Initial draw with scrim
+      regionCtx.drawImage(compositedImage, 0, 0);
+      regionCtx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+      regionCtx.fillRect(0, 0, regionCanvas.width, regionCanvas.height);
+
+      drawCanvas.style.display = 'none';
+      regionUI.classList.remove('hidden');
+    };
+    compositedImage.src = offscreen.toDataURL();
   };
   img.src = screenshotDataUrl;
 }
@@ -130,6 +139,7 @@ function exitRegionMode() {
   drawCanvas.style.display = 'block';
   regionStart = null;
   regionRect = null;
+  compositedImage = null;
   // If there were no annotations, just close
   if (isCanvasEmpty()) {
     window.quickclip.exitDrawMode();
@@ -170,52 +180,35 @@ regionCanvas.addEventListener('mouseup', () => {
 });
 
 function redrawRegion() {
-  // Redraw the composited image with scrim
-  const img = new Image();
-  img.onload = () => {
-    regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
-    regionCtx.drawImage(img, 0, 0, regionCanvas.width, regionCanvas.height);
-    regionCtx.drawImage(drawCanvas, 0, 0);
-    regionCtx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-    regionCtx.fillRect(0, 0, regionCanvas.width, regionCanvas.height);
+  if (!compositedImage) return;
+  regionCtx.clearRect(0, 0, regionCanvas.width, regionCanvas.height);
+  // Draw composited image with scrim
+  regionCtx.drawImage(compositedImage, 0, 0);
+  regionCtx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+  regionCtx.fillRect(0, 0, regionCanvas.width, regionCanvas.height);
 
-    if (regionRect) {
-      // Clear the scrim inside the selected rectangle to show the bright region
-      regionCtx.clearRect(regionRect.x, regionRect.y, regionRect.w, regionRect.h);
-      regionCtx.drawImage(img, regionRect.x, regionRect.y, regionRect.w, regionRect.h,
-        regionRect.x, regionRect.y, regionRect.w, regionRect.h);
-      // Draw annotations inside region
-      regionCtx.drawImage(drawCanvas, regionRect.x, regionRect.y, regionRect.w, regionRect.h,
-        regionRect.x, regionRect.y, regionRect.w, regionRect.h);
-      // Selection border
-      regionCtx.strokeStyle = '#fff';
-      regionCtx.lineWidth = 2;
-      regionCtx.setLineDash([6, 3]);
-      regionCtx.strokeRect(regionRect.x, regionRect.y, regionRect.w, regionRect.h);
-      regionCtx.setLineDash([]);
-    }
-  };
-  img.src = screenshotDataUrl;
+  if (regionRect) {
+    // Clear scrim in selection and show bright region
+    regionCtx.clearRect(regionRect.x, regionRect.y, regionRect.w, regionRect.h);
+    regionCtx.drawImage(compositedImage, regionRect.x, regionRect.y, regionRect.w, regionRect.h,
+      regionRect.x, regionRect.y, regionRect.w, regionRect.h);
+    // Dashed selection border
+    regionCtx.strokeStyle = '#fff';
+    regionCtx.lineWidth = 2;
+    regionCtx.setLineDash([6, 3]);
+    regionCtx.strokeRect(regionRect.x, regionRect.y, regionRect.w, regionRect.h);
+    regionCtx.setLineDash([]);
+  }
 }
 
 function cropAndSend() {
-  // Create a crop canvas with the selected region
+  if (!compositedImage) return;
   const cropCanvas = document.createElement('canvas');
   cropCanvas.width = regionRect.w;
   cropCanvas.height = regionRect.h;
   const cropCtx = cropCanvas.getContext('2d');
-
-  // Draw screenshot region
-  const img = new Image();
-  img.onload = () => {
-    cropCtx.drawImage(img, regionRect.x, regionRect.y, regionRect.w, regionRect.h,
-      0, 0, regionRect.w, regionRect.h);
-    // Draw annotation region on top
-    cropCtx.drawImage(drawCanvas, regionRect.x, regionRect.y, regionRect.w, regionRect.h,
-      0, 0, regionRect.w, regionRect.h);
-    // Send as data URL
-    const dataUrl = cropCanvas.toDataURL('image/png');
-    window.quickclip.snippetCaptured(dataUrl);
-  };
-  img.src = screenshotDataUrl;
+  cropCtx.drawImage(compositedImage, regionRect.x, regionRect.y, regionRect.w, regionRect.h,
+    0, 0, regionRect.w, regionRect.h);
+  const dataUrl = cropCanvas.toDataURL('image/png');
+  window.quickclip.snippetCaptured(dataUrl);
 }
