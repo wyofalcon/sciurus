@@ -12,6 +12,18 @@ Before implementing any new feature or significant code change, launch a Haiku s
 
 The audit agent should report findings concisely. If duplicates or dead code are found, address them as part of the implementation rather than adding more redundancy.
 
+**Save findings:** After the audit completes, append a summary to `.ai-workflow/context/AUDIT_LOG.md` using this format:
+
+```markdown
+## YYYY-MM-DD — Feature Name
+
+- Finding 1
+- Finding 2
+- Recommendation
+```
+
+These findings are visible in the Workflow tab's "Audits" section inside Sciurus.
+
 ## Project Overview
 
 Sciurus — an ADHD-friendly Electron app for AI-powered knowledge capture. Screenshot → note → AI categorization. Designed for developers using AI-assisted coding tools who need rapid issue capture without breaking flow.
@@ -45,7 +57,9 @@ No test suite exists. Dev testing is done via `npm run dev` + DevTools console.
 
 ```
 Renderer (3 windows)          Main Process (src/main.js)
-  index.html  — notes viewer     ├─ Tray + backup hotkey (Ctrl+Shift+Q)
+  index.html  — notes viewer     ├─ Tray + global hotkey (Ctrl+Shift+Q)
+    (4 tabs: Notes, Projects,    │
+     Workflow, Settings)         │
   capture.html — screenshot popup │─ Clipboard watcher (1s poll)
   setup.html  — first-run wizard  │─ Window metadata capture
          ↕ IPC (preload.js)       │─ IPC handlers + event emitters
@@ -77,7 +91,7 @@ MCP Server (mcp-server/)       Workflow System (workflow/)
 
 ### IPC Pattern
 
-All renderer↔main communication goes through `preload.js` which exposes `window.quickclip.*` (60+ methods). Context isolation is enforced — no `nodeIntegration`.
+All renderer↔main communication goes through `preload.js` which exposes `window.quickclip.*` (~50 methods). Context isolation is enforced — no `nodeIntegration`.
 
 - **`ipcMain.handle` / `ipcRenderer.invoke`** — used for all request/response calls (clips, projects, settings, AI)
 - **`ipcMain.on` / `ipcRenderer.send`** — used for fire-and-forget window controls (`close-capture`, `hide-main`, `open-capture`)
@@ -88,8 +102,25 @@ All renderer↔main communication goes through `preload.js` which exposes `windo
 REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatically by main.js after DB/AI init. Mirrors IPC handlers so external tools can access Sciurus.
 
 - **Port:** `SCIURUS_API_PORT` env var, default `7277`
-- **Endpoints:** `/api/health`, `/api/clips`, `/api/clips/:id`, `/api/projects`, `/api/categories`, `/api/settings`, `/api/ai/search`, `/api/ai/summarize`
-- **Methods:** GET (list/read), POST (create), PATCH (update), DELETE (soft-delete/permanent)
+- **Endpoints:**
+  - `/api/health` — GET health check
+  - `/api/clips` — GET list, POST create
+  - `/api/clips/trash` — GET trashed clips
+  - `/api/clips/:id` — GET read, PATCH update, DELETE soft-delete
+  - `/api/clips/:id/complete` — POST mark complete
+  - `/api/clips/:id/uncomplete` — POST mark uncomplete
+  - `/api/clips/:id/restore` — POST restore from trash
+  - `/api/clips/:id/permanent` — DELETE permanent deletion
+  - `/api/projects` — GET list, POST create
+  - `/api/categories` — GET list
+  - `/api/settings` — GET read, PATCH update
+  - `/api/ai/search` — POST semantic search
+  - `/api/ai/summarize` — POST summarize clips
+  - `/api/ai/status` — GET AI module status
+  - `/api/workflow/status` — GET workflow engine status
+  - `/api/workflow/changelog` — GET workflow changelog
+  - `/api/workflow/prompts` — GET tracked prompts
+  - `/api/workflow/audits` — GET pre-feature audit log
 - **Route matching:** custom `matchRoute()` with `:param` placeholders — no Express dependency
 - New API endpoints must mirror the IPC handler logic (rules, sanitization, audit entries, AI triggers)
 
@@ -97,9 +128,9 @@ REST API on `http://127.0.0.1:7277` (localhost only, no auth). Started automatic
 
 Separate Node.js process (stdio transport) that bridges AI IDE agents to Sciurus via the HTTP API. Has its own `package.json` with `@modelcontextprotocol/sdk` dependency.
 
-**Tool categories:**
-- **Knowledge tools** (`clip_*`, `project_*`, `category_list`, `sciurus_health`) — proxy to HTTP API
-- **Workflow tools** (`session_context`, `session_read`, `git_status`) — run locally via `child_process`
+**Tools (16 total):**
+- **Knowledge:** `clip_list`, `clip_get`, `clip_create`, `clip_update`, `clip_delete`, `clip_complete`, `clip_search`, `clip_summarize`, `project_list`, `project_get`, `project_create`, `category_list`, `sciurus_health` — proxy to HTTP API
+- **Workflow:** `session_context`, `session_read`, `git_status` — run locally via `child_process`
 
 **Container-aware:** auto-detects devcontainers/Codespaces and uses `host.docker.internal` to reach the Electron app on the host.
 
@@ -140,7 +171,19 @@ Rules run first (instant). If AI is enabled, it runs async in background — enr
 
 ### Renderer Notes
 
-`renderer/index.js` is a large single-file (~2000 lines) that drives the main notes viewer. It manages tabs (General Notes, Projects, Settings), filtering, sorting, and all UI rendering via DOM manipulation (no framework). HTML escaping uses `esc()` and `escAttr()` helpers — always use these for user content.
+`renderer/index.js` is a large single-file (~2000 lines) that drives the main notes viewer. It manages tabs (General Notes, Projects, Workflow, Settings), filtering, sorting, and all UI rendering via DOM manipulation (no framework). HTML escaping uses `esc()` and `escAttr()` helpers — always use these for user content.
+
+### Workflow Tab
+
+The main window has a Workflow tab that surfaces the AI dev workflow state directly in the app. Five sub-views navigated via sidebar:
+
+- **Status** — toggle switches for relay mode & audit watch; clickable pending/completed prompt counts
+- **Prompts** — tracked prompt log with All/Pending/Done filter bar
+- **Audits** — pre-feature audit findings log (collapsible entries from `AUDIT_LOG.md`)
+- **Session** — current `SESSION.md` contents
+- **Changelog** — workflow changelog
+
+Data flows through IPC (`get-workflow-status`, `get-workflow-changelog`, `get-workflow-prompts`) and is also exposed via the HTTP API (`/api/workflow/*`).
 
 ### Audit Ledger
 
@@ -162,11 +205,13 @@ Two-layer structure: `workflow/` (generic templates + Linux scripts from ai-dev-
 
 **Quick commands (Git Bash):**
 ```bash
-bash .ai-workflow/scripts/ensure-workflow.sh           # Health check
-bash .ai-workflow/scripts/show-status.sh               # Workflow status
-bash .ai-workflow/scripts/show-status.sh compact       # One-line status
-bash .ai-workflow/scripts/compose-instructions.sh builder  # Dump builder instructions
+bash .ai-workflow/scripts/ensure-workflow.sh              # Health check
+bash .ai-workflow/scripts/show-status.sh                  # Workflow status
+bash .ai-workflow/scripts/show-status.sh compact          # One-line status
+bash .ai-workflow/scripts/compose-instructions.sh builder # Dump builder instructions
 bash .ai-workflow/scripts/prompt-tracker.sh add "scope" "description"  # Track a prompt
+bash .ai-workflow/scripts/toggle-relay-mode.sh            # Toggle relay mode on/off
+bash .ai-workflow/scripts/toggle-audit-watch.sh           # Toggle audit watch on/off
 ```
 
 ### Templates: `workflow/`

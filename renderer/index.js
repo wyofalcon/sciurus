@@ -28,6 +28,7 @@ let selectedProjectId = null;
 let workflowStatus = null;
 let workflowChangelog = null;
 let workflowPrompts = [];
+let workflowAudits = null;
 let workflowSection = 'status';
 
 // ── Init ──
@@ -400,10 +401,11 @@ function renderHelpContent(el) {
 // =====================================================================
 
 async function loadWorkflowData() {
-  [workflowStatus, workflowChangelog, workflowPrompts] = await Promise.all([
+  [workflowStatus, workflowChangelog, workflowPrompts, workflowAudits] = await Promise.all([
     window.quickclip.getWorkflowStatus(),
     window.quickclip.getWorkflowChangelog(),
     window.quickclip.getWorkflowPrompts(),
+    window.quickclip.getWorkflowAudits(),
   ]);
 }
 
@@ -411,6 +413,7 @@ function renderWorkflowSidebar(el) {
   const sections = [
     { id: 'status', label: 'Status' },
     { id: 'prompts', label: 'Prompts' },
+    { id: 'audits', label: 'Audits' },
     { id: 'session', label: 'Session' },
     { id: 'changelog', label: 'Changelog' },
   ];
@@ -428,34 +431,45 @@ function renderWorkflowContent(el) {
   }
   if (workflowSection === 'status') renderWorkflowStatus(el);
   else if (workflowSection === 'prompts') renderWorkflowPrompts(el);
+  else if (workflowSection === 'audits') renderWorkflowAudits(el);
   else if (workflowSection === 'session') renderWorkflowSession(el);
   else if (workflowSection === 'changelog') renderWorkflowChangelog(el);
 }
 
 function renderWorkflowStatus(el) {
   const s = workflowStatus;
-  const relayClass = s.relayMode === 'auto' ? 'wf-badge-green' : 'wf-badge-yellow';
-  const auditClass = s.auditMode === 'on' ? 'wf-badge-green' : 'wf-badge-yellow';
+  const relayOn = s.relayMode === 'auto';
+  const auditOn = s.auditMode === 'on';
   const pendingCount = workflowPrompts.filter((p) => p.status === 'CRAFTED' || p.status === 'SENT' || p.status === 'BUILDING').length;
   const doneCount = workflowPrompts.filter((p) => p.status === 'DONE').length;
 
   el.innerHTML = `
     <div class="wf-status-grid">
-      <div class="wf-card">
+      <div class="wf-card wf-card-toggle" onclick="toggleRelay()" title="Click to toggle relay mode">
         <div class="wf-card-label">Relay Mode</div>
-        <div class="wf-card-value"><span class="wf-badge ${relayClass}">${esc(s.relayMode)}</span></div>
+        <div class="wf-card-value">
+          <label class="wf-switch"><input type="checkbox" ${relayOn ? 'checked' : ''} tabindex="-1"><span class="wf-slider"></span></label>
+          <span class="wf-toggle-label">${relayOn ? 'Auto' : 'Review'}</span>
+        </div>
+        <div class="wf-card-hint">${relayOn ? 'Prompts relay immediately' : 'You review before sending'}</div>
       </div>
-      <div class="wf-card">
+      <div class="wf-card wf-card-toggle" onclick="toggleAudit()" title="Click to toggle audit watch">
         <div class="wf-card-label">Audit Watch</div>
-        <div class="wf-card-value"><span class="wf-badge ${auditClass}">${esc(s.auditMode)}</span></div>
+        <div class="wf-card-value">
+          <label class="wf-switch"><input type="checkbox" ${auditOn ? 'checked' : ''} tabindex="-1"><span class="wf-slider"></span></label>
+          <span class="wf-toggle-label">${auditOn ? 'On' : 'Off'}</span>
+        </div>
+        <div class="wf-card-hint">${auditOn ? 'Auto-audit files on save' : 'Manual auditing only'}</div>
       </div>
-      <div class="wf-card">
+      <div class="wf-card wf-card-click${pendingCount > 0 ? ' wf-card-active' : ''}" onclick="showPromptFilter('pending')" title="View pending prompts">
         <div class="wf-card-label">Pending Prompts</div>
         <div class="wf-card-value wf-card-num">${pendingCount}</div>
+        <div class="wf-card-hint">${pendingCount > 0 ? 'Click to view details' : 'No prompts in progress'}</div>
       </div>
-      <div class="wf-card">
+      <div class="wf-card wf-card-click${doneCount > 0 ? ' wf-card-active' : ''}" onclick="showPromptFilter('done')" title="View completed prompts">
         <div class="wf-card-label">Completed Prompts</div>
         <div class="wf-card-value wf-card-num">${doneCount}</div>
+        <div class="wf-card-hint">${doneCount > 0 ? 'Click to view details' : 'No prompts completed'}</div>
       </div>
     </div>
     <div class="wf-section">
@@ -471,13 +485,51 @@ function renderWorkflowStatus(el) {
   `;
 }
 
+async function toggleRelay() {
+  const next = await window.quickclip.toggleRelayMode();
+  workflowStatus.relayMode = next;
+  renderAll();
+}
+
+async function toggleAudit() {
+  const next = await window.quickclip.toggleAuditWatch();
+  workflowStatus.auditMode = next;
+  renderAll();
+}
+
+let workflowPromptFilter = null;
+
+function showPromptFilter(filter) {
+  workflowPromptFilter = filter;
+  workflowSection = 'prompts';
+  renderAll();
+}
+
 function renderWorkflowPrompts(el) {
+  const backBtn = '<div class="wf-back-bar"><button class="wf-back-btn" onclick="workflowSection=\'status\';renderAll()" title="Back to Workflow status">&#x2190; Back to Workflow</button></div>';
   if (!workflowPrompts.length) {
-    el.innerHTML = '<div class="wf-empty"><h2>No Prompts Yet</h2><p>Prompt tracking starts when the Architect generates prompt IDs.</p></div>';
+    el.innerHTML = backBtn + '<div class="wf-empty"><h2>No Prompts Yet</h2><p>Prompt tracking starts when the Architect generates prompt IDs.</p></div>';
     return;
   }
-  let html = '<div class="wf-prompt-list">';
-  workflowPrompts.forEach((p) => {
+  const isPending = (p) => p.status === 'CRAFTED' || p.status === 'SENT' || p.status === 'BUILDING';
+  const isDone = (p) => p.status === 'DONE';
+  let filtered = workflowPrompts;
+  if (workflowPromptFilter === 'pending') filtered = workflowPrompts.filter(isPending);
+  else if (workflowPromptFilter === 'done') filtered = workflowPrompts.filter(isDone);
+
+  let html = backBtn + '<div class="wf-prompt-filter-bar">';
+  html += `<button class="wf-filter-btn${!workflowPromptFilter ? ' active' : ''}" onclick="workflowPromptFilter=null;renderAll()">All (${workflowPrompts.length})</button>`;
+  html += `<button class="wf-filter-btn${workflowPromptFilter === 'pending' ? ' active' : ''}" onclick="workflowPromptFilter='pending';renderAll()">Pending (${workflowPrompts.filter(isPending).length})</button>`;
+  html += `<button class="wf-filter-btn${workflowPromptFilter === 'done' ? ' active' : ''}" onclick="workflowPromptFilter='done';renderAll()">Done (${workflowPrompts.filter(isDone).length})</button>`;
+  html += '</div>';
+
+  if (!filtered.length) {
+    html += `<div class="wf-empty"><p>No ${workflowPromptFilter || ''} prompts found.</p></div>`;
+    el.innerHTML = html;
+    return;
+  }
+  html += '<div class="wf-prompt-list">';
+  filtered.forEach((p) => {
     const statusClass = p.status === 'DONE' ? 'wf-badge-green' : p.status === 'FAILED' ? 'wf-badge-red' : 'wf-badge-yellow';
     const typeLabel = p.type === 'DIRECT' ? '<span class="wf-badge wf-badge-dim">direct</span> ' : '';
     html += `<div class="wf-prompt-row">
@@ -485,6 +537,30 @@ function renderWorkflowPrompts(el) {
       ${typeLabel}<span class="wf-badge ${statusClass}">${esc(p.status)}</span>
       <span class="wf-prompt-desc">${esc(p.description || '')}</span>
       <span class="wf-prompt-time">${p.timestamp ? esc(p.timestamp) : ''}</span>
+    </div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function renderWorkflowAudits(el) {
+  if (!workflowAudits || workflowAudits.trim() === '' || !workflowAudits.includes('## ')) {
+    el.innerHTML = '<div class="wf-empty"><h2>No Audits Yet</h2><p>Pre-feature audit findings will appear here after the next audit runs.</p></div>';
+    return;
+  }
+  // Parse markdown sections (## headings) into audit entries
+  const sections = workflowAudits.split(/^(?=## )/m).filter((s) => s.startsWith('## '));
+  let html = '<div class="wf-audit-list">';
+  sections.forEach((section, i) => {
+    const firstLine = section.substring(0, section.indexOf('\n')).replace(/^## /, '');
+    const body = section.substring(section.indexOf('\n') + 1).trim();
+    const id = 'audit-' + i;
+    html += `<div class="wf-audit-entry">
+      <div class="wf-audit-header" onclick="document.getElementById('${id}').classList.toggle('collapsed')">
+        <span class="wf-audit-title">${esc(firstLine)}</span>
+        <span class="wf-audit-arrow">&#x25BC;</span>
+      </div>
+      <div class="wf-audit-body" id="${id}"><pre>${esc(body)}</pre></div>
     </div>`;
   });
   html += '</div>';
@@ -1513,13 +1589,22 @@ function renderClipCard(c, inProject, allKnownTags) {
 
   // Screenshot
   if (c.image === '__on_disk__') {
+    html += `<div class="img-wrap">`;
     html += `<img data-clip-id="${id}" class="img-loading" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse screenshot" />`;
+    html += `<button class="img-copy-btn" onclick="event.stopPropagation();copyClipImage('${id}',this)" title="Copy image to clipboard">&#x1F4CB;</button>`;
+    html += `</div>`;
   } else if (c.image) {
+    html += `<div class="img-wrap">`;
     html += `<img src="${esc(c.image)}" onclick="this.classList.toggle('expanded')" title="Click to expand/collapse screenshot" />`;
+    html += `<button class="img-copy-btn" onclick="event.stopPropagation();copyClipImage('${id}',this)" title="Copy image to clipboard">&#x1F4CB;</button>`;
+    html += `</div>`;
   }
 
-  // Comment
+  // Comment (flows beside the thumbnail)
   if (c.comment) html += `<div class="comment copyable" onclick="copyInline(this, 'comment', '${id}')">${esc(c.comment)}<span class="copy-hint" title="Click to copy comment">&#x1F4CB;</span></div>`;
+
+  // Clear float so everything below sits under the thumbnail
+  html += `<div class="clip-clearfix"></div>`;
 
   // AI summary (filing label)
   if (c.aiSummary) html += `<div class="ai-summary copyable" onclick="copyInline(this, 'aiSummary', '${id}')"><span class="ai-label">AI Summary</span> ${esc(c.aiSummary)}<span class="copy-hint" title="Click to copy AI summary">&#x1F4CB;</span></div>`;
@@ -1657,6 +1742,14 @@ async function copyPrompt(id) {
   const clip = clips.find(c => c.id === id);
   if (clip && clip.aiFixPrompt) {
     await navigator.clipboard.writeText(clip.aiFixPrompt);
+  }
+}
+
+async function copyClipImage(id, btn) {
+  const ok = await window.quickclip.copyImageToClipboard(id);
+  if (ok) {
+    btn.classList.add('img-copy-flash');
+    setTimeout(() => btn.classList.remove('img-copy-flash'), 800);
   }
 }
 

@@ -323,6 +323,11 @@ function startApiServer(deps) {
         } catch { return json(res, []); }
       }
 
+      if (method === 'GET' && pathname === '/api/workflow/audits') {
+        const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'AUDIT_LOG.md');
+        try { return json(res, { content: fs.readFileSync(p, 'utf8') }); } catch { return json(res, { content: null }); }
+      }
+
       // ── 404 ──
       error(res, `Not found: ${method} ${pathname}`, 404);
 
