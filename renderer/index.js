@@ -3,6 +3,7 @@
 // ── State ──
 
 let activeTab = 'general';
+let isLiteMode = false;
 let clips = [];
 let categories = [];
 let projects = [];
@@ -37,9 +38,39 @@ let workflowSection = 'status';
   const hasKey = await window.quickclip.hasApiKey();
   if (!hasKey) document.getElementById('noKeyBanner').style.display = 'block';
   appVersion = await window.quickclip.getAppVersion();
+
+  // Check if we're in lite mode
+  const mode = await window.quickclip.getAppMode();
+  if (mode === 'lite') {
+    isLiteMode = true;
+    applyLiteMode();
+  }
+
   await loadData();
   renderAll();
 })();
+
+function applyLiteMode() {
+  // Hide General Notes and Workflow tabs
+  document.querySelectorAll('.tab').forEach((btn) => {
+    if (btn.dataset.tab === 'general' || btn.dataset.tab === 'workflow') {
+      btn.style.display = 'none';
+    }
+  });
+  // Add "Lite Mode" label to header
+  const h1 = document.querySelector('.header h1');
+  if (h1) {
+    const label = document.createElement('span');
+    label.className = 'lite-mode-label';
+    label.textContent = 'Lite Mode';
+    h1.parentNode.insertBefore(label, h1.nextSibling);
+  }
+  // Force Projects tab active
+  activeTab = 'projects';
+  document.querySelectorAll('.tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === 'projects');
+  });
+}
 
 async function loadData() {
   [clips, categories, projects, settings] = await Promise.all([
@@ -48,6 +79,16 @@ async function loadData() {
     window.quickclip.getProjects(),
     window.quickclip.getSettings(),
   ]);
+  // In lite mode, auto-select the active project (or first project if none set)
+  if (isLiteMode && selectedProjectId === null) {
+    const liteProject = settings.lite_active_project;
+    if (liteProject) {
+      selectedProjectId = liteProject;
+    } else if (projects.length > 0) {
+      selectedProjectId = projects[0].id;
+      window.quickclip.setLiteActiveProject(projects[0].id);
+    }
+  }
 }
 
 // Escape hides the main window to tray
@@ -90,6 +131,8 @@ function escAttr(s) {
 // ── Tab Switching ──
 
 function switchTab(tab) {
+  // In lite mode, only allow projects, settings, and help tabs
+  if (isLiteMode && (tab === 'general' || tab === 'workflow')) return;
   activeTab = tab;
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
@@ -225,8 +268,11 @@ function renderGeneralSidebar(el) {
 
 function renderProjectsSidebar(el) {
   let html = '<div class="sec">Projects</div>';
-  html += `<button class="sb-btn ${selectedProjectId === null ? 'active' : ''}" onclick="selectProject(null)">
-    <span>All Projects</span><span class="sb-count">${projects.length}</span></button>`;
+  // In lite mode, hide "All Projects" — user must select a single project
+  if (!isLiteMode) {
+    html += `<button class="sb-btn ${selectedProjectId === null ? 'active' : ''}" onclick="selectProject(null)">
+      <span>All Projects</span><span class="sb-count">${projects.length}</span></button>`;
+  }
 
   projects.forEach((p) => {
     const active = selectedProjectId === p.id ? 'active' : '';
@@ -955,7 +1001,13 @@ function _doSearchProject() {
 }
 
 function selectProject(id) {
+  // In lite mode, must always have a project selected
+  if (isLiteMode && id === null) return;
   selectedProjectId = id;
+  // Sync active project setting in lite mode
+  if (isLiteMode && id !== null) {
+    window.quickclip.setLiteActiveProject(id);
+  }
   renderAll();
 }
 

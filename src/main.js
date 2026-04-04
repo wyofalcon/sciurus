@@ -144,7 +144,7 @@ function createSetupWindow() {
 
 async function createMainWindow() {
   const mode = await getAppMode();
-  const htmlFile = mode === 'lite' ? 'lite-index.html' : 'index.html';
+  const htmlFile = 'index.html';  // Both modes use same renderer; lite mode hides tabs via JS
   const windowSize = mode === 'lite' ? { width: 450, height: 600 } : { width: 1100, height: 750 };
   mainWindow = new BrowserWindow({
     width: windowSize.width, height: windowSize.height, show: false,
