@@ -235,6 +235,7 @@ const CLIPS_BASE_QUERY = `
          c.process_name AS "processName",
          c.deleted_at AS "deletedAt",
          c.summarize_count AS "summarizeCount",
+         c.source,
          CASE WHEN COUNT(cc.id) = 0 THEN '[]'
               ELSE json_group_array(json_object('text', cc.text, 'ts', cc.ts))
          END AS comments
@@ -283,7 +284,8 @@ async function getClip(id) {
 
 async function saveClip(clip) {
   const categoryId = await getCategoryId(clip.category || 'Uncategorized');
-  const source = clip.source || 'full';
+  const VALID_SOURCES = ['full', 'lite'];
+  const source = VALID_SOURCES.includes(clip.source) ? clip.source : 'full';
   db.prepare(
     `INSERT INTO clips (id, image, comment, category_id, project_id, tags, ai_summary, url, status, timestamp, source, window_title, process_name)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`

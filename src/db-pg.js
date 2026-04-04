@@ -161,6 +161,7 @@ const CLIPS_BASE_QUERY = `
          c.process_name AS "processName",
          c.deleted_at AS "deletedAt",
          c.summarize_count AS "summarizeCount",
+         c.source,
          COALESCE(
            json_agg(
              json_build_object('text', cc.text, 'ts', cc.ts)
@@ -210,7 +211,8 @@ async function getClip(id) {
 
 async function saveClip(clip) {
   const categoryId = await getCategoryId(clip.category || 'Uncategorized');
-  const source = clip.source || 'full';
+  const VALID_SOURCES = ['full', 'lite'];
+  const source = VALID_SOURCES.includes(clip.source) ? clip.source : 'full';
   await pool.query(
     `INSERT INTO clips (id, image, comment, category_id, project_id, tags, ai_summary, url, status, timestamp, source, window_title, process_name)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
