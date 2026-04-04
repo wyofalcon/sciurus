@@ -24,6 +24,7 @@ let collapsedGroups = new Set();
 
 // Projects tab state
 let selectedProjectId = null;
+let hideCompleted = false;
 
 // Workflow tab state
 let workflowStatus = null;
@@ -916,6 +917,10 @@ function renderProjectDetail(el) {
   if (!proj) { selectProject(null); return; }
 
   let projectClips = clips.filter((c) => c.project_id === selectedProjectId);
+  const completedCount = projectClips.filter((c) => c.completedAt).length;
+  if (hideCompleted) {
+    projectClips = projectClips.filter((c) => !c.completedAt);
+  }
 
   let html = `<div class="project-detail-header">
     <div>
@@ -928,6 +933,15 @@ function renderProjectDetail(el) {
       <button class="sb-btn-action danger" onclick="confirmDeleteProject(${proj.id})">Delete</button>
     </div>
   </div>`;
+
+  if (completedCount > 0) {
+    html += `<div class="completed-toggle">
+      <label class="toggle-label" title="Show or hide completed notes">
+        <input type="checkbox" ${hideCompleted ? '' : 'checked'} onchange="toggleCompleted()" />
+        <span>Show completed (${completedCount})</span>
+      </label>
+    </div>`;
+  }
 
   if (proj.description) {
     html += `<div class="project-desc">${esc(proj.description)}</div>`;
@@ -998,6 +1012,11 @@ function _doSearchProject() {
   wrapper.innerHTML = clipListHtml;
   while (wrapper.firstChild) el.appendChild(wrapper.firstChild);
   loadDiskImages(el);
+}
+
+function toggleCompleted() {
+  hideCompleted = !hideCompleted;
+  renderAll();
 }
 
 function selectProject(id) {

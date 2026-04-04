@@ -805,6 +805,28 @@ body {
 .project-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
 .project-repo { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; font-family: monospace; }
 
+.completed-toggle {
+  margin: 8px 0;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.toggle-label input[type="checkbox"] {
+  accent-color: var(--accent-blue);
+  cursor: pointer;
+}
+
+.toggle-label:hover span {
+  color: var(--text-primary);
+}
+
 /* ── Project Dialog ── */
 
 .project-dialog {
