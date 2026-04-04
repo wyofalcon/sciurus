@@ -299,12 +299,12 @@ async function generateLitePrompt(comment, imageDataURL, windowMeta = {}, projec
     const mimeMatch = imageDataURL.match(/^data:(image\/\w+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
     const base64 = imageDataURL.replace(/^data:image\/\w+;base64,/, '');
-    messageParts.push({ inlineData: { mimeType, data: base64 } });
+    messageParts.push({ inline_data: { mime_type: mimeType, data: base64 } });
   }
   messageParts.push({ text: userText });
 
   try {
-    const result = await callGemini(LITE_PROMPT, messageParts);
+    const result = await callGemini(LITE_PROMPT, messageParts, { raw: true });
     if (!result) return null;
     return result.replace(/^["'`]+|["'`]+$/g, '').trim();
   } catch (e) {
@@ -338,7 +338,7 @@ async function search(query, clips) {
 
 // ── Internal ──
 
-async function callGemini(systemInstruction, parts) {
+async function callGemini(systemInstruction, parts, { raw = false } = {}) {
   if (!isEnabled()) return null;
 
   let url, headers;
@@ -378,6 +378,7 @@ async function callGemini(systemInstruction, parts) {
   }
 
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  if (raw) return text.trim();
   const clean = text.replace(/```json|```/g, '').trim();
   try {
     return JSON.parse(clean);
