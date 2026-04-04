@@ -152,6 +152,7 @@ function runSqliteMigrations() {
     `ALTER TABLE clips ADD COLUMN deleted_at TEXT DEFAULT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
     `ALTER TABLE clips ADD COLUMN summarize_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE clips ADD COLUMN source TEXT NOT NULL DEFAULT 'full'`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column/index already exists */ }
@@ -255,15 +256,23 @@ function parseClipRow(row) {
   return row;
 }
 
-async function getClips(projectId) {
-  let rows;
-  if (projectId === undefined) {
-    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.deleted_at IS NULL ' + CLIPS_GROUP).all();
-  } else if (projectId === null) {
-    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id IS NULL AND c.deleted_at IS NULL ' + CLIPS_GROUP).all();
-  } else {
-    rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE c.project_id = ? AND c.deleted_at IS NULL ' + CLIPS_GROUP).all(projectId);
+async function getClips(projectId, source) {
+  const conditions = ['c.deleted_at IS NULL'];
+  const params = [];
+
+  if (projectId === null) {
+    conditions.push('c.project_id IS NULL');
+  } else if (projectId !== undefined) {
+    conditions.push('c.project_id = ?');
+    params.push(projectId);
   }
+
+  if (source) {
+    conditions.push('c.source = ?');
+    params.push(source);
+  }
+
+  const rows = db.prepare(CLIPS_BASE_QUERY + ' WHERE ' + conditions.join(' AND ') + CLIPS_GROUP).all(...params);
   return rows.map(parseClipRow);
 }
 
@@ -274,9 +283,10 @@ async function getClip(id) {
 
 async function saveClip(clip) {
   const categoryId = await getCategoryId(clip.category || 'Uncategorized');
+  const source = clip.source || 'full';
   db.prepare(
-    `INSERT INTO clips (id, image, comment, category_id, project_id, tags, ai_summary, url, status, timestamp, window_title, process_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO clips (id, image, comment, category_id, project_id, tags, ai_summary, url, status, timestamp, source, window_title, process_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     clip.id,
     clip.image || null,
@@ -288,6 +298,7 @@ async function saveClip(clip) {
     clip.url || null,
     clip.status || 'parked',
     clip.timestamp,
+    source,
     clip.window_title || null,
     clip.process_name || null,
   );
