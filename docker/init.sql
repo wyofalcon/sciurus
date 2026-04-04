@@ -10,6 +10,7 @@ CREATE TABLE projects (
     description TEXT DEFAULT '',
     repo_path   VARCHAR(500) DEFAULT NULL,
     color       VARCHAR(7) DEFAULT '#3b82f6',
+    active_in_ide BOOLEAN NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

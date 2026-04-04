@@ -84,6 +84,7 @@ async function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS summarize_count INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS source VARCHAR(10) NOT NULL DEFAULT 'full'`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_in_ide BOOLEAN NOT NULL DEFAULT FALSE`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }
@@ -406,6 +407,7 @@ async function updateProject(id, data) {
   if (data.description !== undefined) { fields.push(`description = $${idx++}`); params.push(data.description); }
   if (data.repo_path !== undefined) { fields.push(`repo_path = $${idx++}`); params.push(data.repo_path); }
   if (data.color !== undefined) { fields.push(`color = $${idx++}`); params.push(data.color); }
+  if (data.active_in_ide !== undefined) { fields.push(`active_in_ide = $${idx++}`); params.push(data.active_in_ide); }
 
   if (fields.length === 0) return null;
 

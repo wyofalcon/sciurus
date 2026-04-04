@@ -277,8 +277,9 @@ function renderProjectsSidebar(el) {
 
   projects.forEach((p) => {
     const active = selectedProjectId === p.id ? 'active' : '';
+    const ideIndicator = (p.active_in_ide || p.activeInIde) ? '<span class="ide-dot" title="Open in IDE">&#x1F7E2;</span>' : '';
     html += `<button class="sb-btn ${active}" onclick="selectProject(${p.id})" style="${selectedProjectId === p.id ? 'border-left:3px solid ' + esc(p.color) : ''}">
-      <span><span class="proj-dot" style="background:${esc(p.color)}"></span>${esc(p.name)}</span>
+      <span><span class="proj-dot" style="background:${esc(p.color)}"></span>${esc(p.name)}${ideIndicator}</span>
       <span class="sb-count">${p.clipCount || 0}</span></button>`;
   });
 
@@ -922,12 +923,18 @@ function renderProjectDetail(el) {
     projectClips = projectClips.filter((c) => !c.completedAt);
   }
 
+  const ideActive = proj.active_in_ide || proj.activeInIde;
+
   let html = `<div class="project-detail-header">
     <div>
       <button class="back-btn" onclick="selectProject(null)">&larr; All Projects</button>
       <h2 style="display:inline;margin-left:8px"><span class="proj-dot big" style="background:${esc(proj.color)}"></span>${esc(proj.name)}</h2>
+      ${ideActive ? '<span class="ide-badge">IN IDE</span>' : ''}
     </div>
     <div class="project-detail-actions">
+      <button class="sb-btn-action ${ideActive ? 'ide-active' : ''}" onclick="toggleIde(${proj.id})" title="${ideActive ? 'Mark as not open in IDE' : 'Mark as open in IDE'}">
+        ${ideActive ? '&#x1F7E2; In IDE' : '&#x2B55; Open in IDE'}
+      </button>
       <button class="sb-btn-action summarize-btn" onclick="showProjectSummary(${proj.id})" title="Generate a side-by-side summary of all notes">&#x2728; Summarize</button>
       <button class="sb-btn-action" onclick="editProject(${proj.id})">Edit</button>
       <button class="sb-btn-action danger" onclick="confirmDeleteProject(${proj.id})">Delete</button>
@@ -1017,6 +1024,10 @@ function _doSearchProject() {
 function toggleCompleted() {
   hideCompleted = !hideCompleted;
   renderAll();
+}
+
+async function toggleIde(projectId) {
+  await window.quickclip.toggleProjectIde(projectId);
 }
 
 function selectProject(id) {

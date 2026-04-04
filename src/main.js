@@ -996,6 +996,15 @@ ipcMain.handle('set-lite-active-project', async (_, projectId) => {
   return true;
 });
 
+ipcMain.handle('toggle-project-ide', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project) return null;
+  const newVal = !project.active_in_ide;
+  await db.updateProject(projectId, { active_in_ide: newVal });
+  notifyMainWindow('projects-changed');
+  return newVal;
+});
+
 // ── IPC Handlers: Workflow ──
 
 ipcMain.handle('get-workflow-status', async () => {

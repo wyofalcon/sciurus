@@ -153,6 +153,7 @@ function runSqliteMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_clips_deleted ON clips(deleted_at)`,
     `ALTER TABLE clips ADD COLUMN summarize_count INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE clips ADD COLUMN source TEXT NOT NULL DEFAULT 'full'`,
+    `ALTER TABLE projects ADD COLUMN active_in_ide INTEGER NOT NULL DEFAULT 0`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column/index already exists */ }
@@ -449,6 +450,7 @@ async function updateProject(id, data) {
   if (data.description !== undefined) { fields.push('description = ?'); params.push(data.description); }
   if (data.repo_path !== undefined) { fields.push('repo_path = ?'); params.push(data.repo_path); }
   if (data.color !== undefined) { fields.push('color = ?'); params.push(data.color); }
+  if (data.active_in_ide !== undefined) { fields.push('active_in_ide = ?'); params.push(data.active_in_ide ? 1 : 0); }
 
   if (fields.length === 0) return null;
 
