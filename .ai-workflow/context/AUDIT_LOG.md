@@ -1,5 +1,14 @@
 # Pre-Feature Audit Log
 
+## 2026-04-04 — Sciurus Lite Mode
+
+- **Workflow file reading duplicated** between main.js IPC handlers and api-server.js (~50 lines). New `workflow-context.js` covers external projects; Sciurus's own reads should migrate to it over time.
+- **Clip save flow duplicated** between main.js `save-clip` handler and api-server.js `POST /api/clips` (~35 lines). Should extract to a shared function.
+- **`get-setting` (singular) IPC handler** appears unused — all renderers call `getSettings()` (plural). Safe to remove.
+- **`archived` column** still present but soft-delete uses `deleted_at` instead. Low priority cleanup.
+- Overlay, toolbar, preload patterns are clean — no duplication or dead code found in files touched by lite mode.
+- Recommendation: None of these block lite mode implementation. Address workflow read consolidation and save-flow dedup in a future cleanup pass.
+
 ## 2026-04-03 — Workflow Context Reader utility module
 
 - `main.js` and `api-server.js` both contain inline `.ai-workflow` path reads (duplicated pattern) — new module targets a different use case (arbitrary repoPath) so no refactor needed now, but future callers should use `workflow-context.js` instead of reimplementing
