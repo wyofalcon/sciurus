@@ -59,6 +59,61 @@ to context-switch between your app, your terminal, and a notes doc.
 - **Setup wizard** — 3-step first-run flow: database, AI config, launch
 - **Settings panel** — configure capture, AI, and app behavior in-app
 - **Cross-platform** — Windows, Linux (AppImage, deb), macOS (dev supported)
+- **Lite Mode** — toggleable simplified UI for fast iteration during active development (see below)
+- **Floating annotation toolbar** — draw on screen in red/green/pink with text tool before capturing
+- **AI prompt generation** — annotated screenshots generate actionable coding prompts with project context
+- **Active-in-IDE tracking** — mark which projects are currently open in your IDE
+- **Workflow context bridge** — AI prompts enriched with current branch, recent commits, and audit findings from the project's `.ai-workflow/` directory
+
+---
+
+## Lite Mode
+
+Lite Mode strips Sciurus down to a focused tool for rapid iteration. Instead of capturing notes for later review, you annotate your screen, type what needs to change, and get an AI-generated prompt you can paste directly into your AI coding tool.
+
+### Activating
+
+Right-click the Sciurus tray icon → **Switch to Lite Mode**. Switch back the same way.
+
+### How it works
+
+1. **Select your active project** in the sidebar (all captures go to this project)
+2. Open the **Toolbar** from the tray menu — a floating bar with color dots and a text tool
+3. **Annotate your screen** — draw or type in red (remove), green (add), or pink (reference)
+4. **Take a snippet** or press `Ctrl+Shift+Q`
+5. A minimal capture popup appears — type what needs to change and click **Save & Generate Prompt**
+6. The AI generates an actionable coding prompt based on your annotations + note + project context
+7. Copy the prompt and paste it into Claude Code, Copilot, or any AI coding tool
+
+### What's different from Full Mode
+
+| | Full Mode | Lite Mode |
+|---|---|---|
+| **Tabs** | General Notes, Projects, Workflow, Settings, Help | Projects only |
+| **Project selection** | Optional — clips can be unassigned | Required — one active project at a time |
+| **Capture popup** | Category picker, project picker, tags | Note field + save button only |
+| **AI output** | Category, tags, summary, URL, fix prompt | Summary + focused coding prompt |
+| **Clip filtering** | All clips visible | Only lite-mode clips for active project |
+
+### Annotation colors
+
+The AI understands your color-coded annotations:
+
+- **Red** — remove, delete, or fix what is marked
+- **Green** — add or create something at this location
+- **Pink** — reference point (identifies something for context, may or may not need changes)
+
+Your **typed note takes priority** over annotations when they conflict.
+
+### Toolbar shortcuts (while in draw mode)
+
+| Key | Action |
+|---|---|
+| `1` / `2` / `3` | Switch to red / green / pink |
+| `T` | Toggle text mode (click to place, type, Enter to commit) |
+| `S` | Take snippet (region select) |
+| `Right-click` | Exit draw mode |
+| `Escape` | Exit draw mode |
 
 ---
 
@@ -309,14 +364,18 @@ sciurus/
 │   ├── db.js            # Database switcher (PostgreSQL or SQLite)
 │   ├── db-pg.js         # PostgreSQL backend (pg)
 │   ├── db-sqlite.js     # SQLite backend (better-sqlite3)
-│   ├── ai.js            # Gemini AI — categorize, search, summarize (native JWT auth)
+│   ├── ai.js            # Gemini AI — categorize, search, summarize, lite prompts (native JWT auth)
 │   ├── rules.js         # Rule-based categorization engine with in-memory cache
 │   ├── window-info.js   # Cross-platform active window capture (Win32/xdotool/gdbus)
-│   └── images.js        # Disk-based image storage + AI compression
+│   ├── images.js        # Disk-based image storage + AI compression
+│   └── workflow-context.js # Reads SESSION.md/AUDIT_LOG.md from project repos
 ├── renderer/
-│   ├── index.html/js/css   # Main window — tabbed notes viewer, project summaries
-│   ├── capture.html/js/css # Capture popup — screenshot preview + note input
-│   └── setup.html/js/css   # First-run setup wizard
+│   ├── index.html/js/css        # Main window — tabbed viewer (full + lite modes)
+│   ├── capture.html/js/css      # Full capture popup — screenshot + note + category/project
+│   ├── lite-capture.html/js/css # Lite capture popup — screenshot + note + generate prompt
+│   ├── toolbar.html/js/css      # Floating annotation toolbar (red/green/pink + text tool)
+│   ├── overlay.html/js/css      # Fullscreen transparent draw/text overlay
+│   └── setup.html/js/css        # First-run setup wizard
 ├── scripts/
 │   ├── launch.js        # Electron launcher (fixes ELECTRON_RUN_AS_NODE in VS Code shells)
 │   └── get-window.ps1   # Windows PowerShell window info script (auto-generated)
@@ -418,9 +477,12 @@ On Wayland + GNOME, `gdbus` is used automatically. Other Wayland compositors are
 
 Sciurus works best when capturing is effortless — one press, no thinking.
 Hit `Ctrl+Win+S` to open Windows Snipping Tool, select a region, and
-Sciurus picks it up automatically from the clipboard. Annotate screenshots
-with PowerToys ZoomIt (colored markers: red = bug, green = approved,
-pink = question) before or after snipping — the AI reads your annotations.
+Sciurus picks it up automatically from the clipboard. Or use the built-in
+**Toolbar** to draw annotations directly on screen and take a snippet —
+no external tools needed. The AI reads your color-coded annotations
+(red = remove, green = add, pink = reference) and generates actionable
+prompts. In **Lite Mode**, the whole flow is optimized for this:
+annotate → capture → get a prompt → paste into your AI coding tool.
 
 ---
 
