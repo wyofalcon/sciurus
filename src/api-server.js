@@ -457,6 +457,51 @@ function startApiServer(deps) {
         try { return json(res, { content: fs.readFileSync(p, 'utf8') }); } catch { return json(res, { content: null }); }
       }
 
+      // PATCH /api/workflow/prompts/:id — update prompt status
+      if (method === 'PATCH' && (m = matchRoute('/api/workflow/prompts/:id', pathname))) {
+        const body = await parseBody(req);
+        const newStatus = body.status;
+        if (!newStatus) return error(res, 'status required');
+
+        const validStatuses = ['CRAFTED', 'BUNDLED', 'SENT', 'BUILDING', 'DONE', 'FAILED', 'QUEUED'];
+        if (!validStatuses.includes(newStatus)) return error(res, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+
+        const promptId = decodeURIComponent(m.params.id);
+
+        // Find the project with this prompt — scan all projects for PROMPT_TRACKER.log
+        const projects = await db.getProjects();
+        let updated = false;
+        for (const p of projects) {
+          if (!p.repo_path) continue;
+          const trackerPath = path.join(p.repo_path, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+          try {
+            const raw = fs.readFileSync(trackerPath, 'utf8');
+            if (!raw.includes(promptId)) continue;
+
+            const lines = raw.split('\n');
+            const newLines = lines.map(line => {
+              if (line.startsWith(promptId + '|')) {
+                const parts = line.split('|');
+                parts[1] = newStatus;
+                // Append affected files if provided (7th field)
+                if (body.files) {
+                  while (parts.length < 7) parts.push('');
+                  parts[6] = typeof body.files === 'string' ? body.files : body.files.join(',');
+                }
+                return parts.join('|');
+              }
+              return line;
+            });
+            fs.writeFileSync(trackerPath, newLines.join('\n'), 'utf8');
+            updated = true;
+            break;
+          } catch {}
+        }
+
+        if (!updated) return error(res, 'Prompt not found in any project tracker', 404);
+        return json(res, { success: true, id: promptId, status: newStatus });
+      }
+
       // ── 404 ──
       error(res, `Not found: ${method} ${pathname}`, 404);
 

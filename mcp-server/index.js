@@ -71,6 +71,30 @@ async function matchProject() {
   return _cachedProject;
 }
 
+// ── IDE Heartbeat ──
+// Sends a heartbeat to HuminLoop so it knows this project is actively connected.
+// Called on every tool invocation. Fire-and-forget — failures are silent.
+function detectAgent() {
+  if (process.env.CLAUDE_CODE) return 'Claude Code';
+  if (process.env.GEMINI_CLI) return 'Gemini CLI';
+  if (process.env.COPILOT_AGENT) return 'Copilot';
+  if (process.env.CURSOR_SESSION_ID) return 'Cursor';
+  if (process.env.WINDSURF_SESSION_ID) return 'Windsurf';
+  if (process.env.CLINE_TASK_ID) return 'Cline';
+  if (process.env.VSCODE_PID) return 'VS Code MCP';
+  return 'MCP Client';
+}
+const _agentName = detectAgent();
+
+async function sendHeartbeat() {
+  try {
+    const project = await matchProject();
+    if (project) {
+      await api('POST', `/api/projects/${project.id}/heartbeat`, { ide: _agentName });
+    }
+  } catch { /* heartbeat is best-effort */ }
+}
+
 // ── Tool Definitions ──
 
 const TOOLS = [
@@ -388,14 +412,48 @@ const HANDLERS = {
 
   async get_pending_prompt() {
     const ctxDir = path.join(PROJECT_ROOT, '.ai-workflow', 'context');
-    const promptPath = path.join(ctxDir, 'IDE_PROMPT.md');
-    const imagePath = path.join(ctxDir, 'ide-prompt-image.png');
+
+    // Scan for queued prompt files (FIFO — oldest first by filename)
+    let promptFiles = [];
+    try {
+      const files = fs.readdirSync(ctxDir);
+      promptFiles = files
+        .filter(f => f.startsWith('IDE_PROMPT_') && f.endsWith('.md'))
+        .sort(); // alphabetical = chronological due to timestamp in name
+    } catch {
+      // directory may not exist
+    }
+
+    // Also check legacy single file
+    const legacyPath = path.join(ctxDir, 'IDE_PROMPT.md');
+    const hasLegacy = fs.existsSync(legacyPath);
+
+    if (promptFiles.length === 0 && !hasLegacy) {
+      return textResult('No pending IDE prompt found. Use HuminLoop to send a prompt to IDE first.');
+    }
+
+    let promptPath, imagePath, promptId;
+
+    if (promptFiles.length > 0) {
+      // Use oldest queued file
+      const fileName = promptFiles[0];
+      promptPath = path.join(ctxDir, fileName);
+      // Extract safe ID from filename: IDE_PROMPT_{safeId}.md
+      const safeId = fileName.replace('IDE_PROMPT_', '').replace('.md', '');
+      promptId = safeId;
+      imagePath = path.join(ctxDir, `ide-prompt-image-${safeId}.png`);
+    } else {
+      // Legacy single file
+      promptPath = legacyPath;
+      imagePath = path.join(ctxDir, 'ide-prompt-image.png');
+      promptId = null;
+    }
 
     let promptText;
     try {
       promptText = fs.readFileSync(promptPath, 'utf-8');
     } catch {
-      return textResult('No pending IDE prompt found. Use HuminLoop to send a prompt to IDE first.');
+      return textResult('No pending IDE prompt found.');
     }
 
     const content = [{ type: 'text', text: promptText }];
@@ -409,6 +467,18 @@ const HANDLERS = {
     // Clean up (one-shot delivery)
     try { fs.unlinkSync(promptPath); } catch {}
     try { fs.unlinkSync(imagePath); } catch {}
+
+    // Update prompt status to SENT via API
+    if (promptId) {
+      const idMatch = promptText.match(/^## Prompt ID: (.+)$/m);
+      if (idMatch) {
+        try {
+          await api('PATCH', `/api/workflow/prompts/${encodeURIComponent(idMatch[1])}`, { status: 'SENT' });
+        } catch (e) {
+          console.error('[MCP] Failed to update prompt status:', e.message);
+        }
+      }
+    }
 
     return { content };
   },
@@ -492,6 +562,8 @@ async function main() {
     const handler = HANDLERS[name];
     if (!handler) return errorResult(`Unknown tool: ${name}`);
     try {
+      // Send heartbeat on every tool call (fire-and-forget)
+      sendHeartbeat();
       return await handler(args || {});
     } catch (e) {
       return errorResult(e.message);
