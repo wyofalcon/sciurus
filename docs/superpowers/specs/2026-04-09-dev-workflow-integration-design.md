@@ -189,10 +189,10 @@ This module becomes the **single source of truth** for all workflow state reads:
 | `readRelayMode(repoPath)` | Returns RELAY_MODE file contents | **New** |
 | `assembleBundle(repoPath, clip, project)` | Orchestrates all reads into a single bundle object | **New** |
 
-### PROMPT_TRACKER.log Format (Unchanged)
+### PROMPT_TRACKER.log Format (Extended)
 
 ```
-ID|STATUS|TIMESTAMP|DESCRIPTION|TYPE|PARENT_ID
+ID|STATUS|TIMESTAMP|DESCRIPTION|TYPE|PARENT_ID|FILES
 ```
 
 - **ID:** `scope:HHMM:MMDD:letter`
@@ -201,8 +201,19 @@ ID|STATUS|TIMESTAMP|DESCRIPTION|TYPE|PARENT_ID
 - **DESCRIPTION:** Brief text from user's note
 - **TYPE:** CRAFTED (from HuminLoop) or DIRECT (from shell script)
 - **PARENT_ID:** Links follow-ups to original prompt (null for first)
+- **FILES:** Comma-separated list of files changed by the resulting commit (populated on DONE)
 
 **Note:** Status BUNDLED is new (between CRAFTED and SENT). CRAFTED now represents prompts created by shell scripts outside HuminLoop. BUNDLED means HuminLoop assembled and delivered the file.
+
+### Affected Files Tracking
+
+When a Builder commits with a Prompt ID, the `prepare-commit-msg` hook captures the list of staged files via `git diff --cached --name-only` and includes them in the PATCH call:
+
+```json
+{ "status": "DONE", "files": ["src/main.js", "renderer/index.js"] }
+```
+
+The API endpoint appends the files to the PROMPT_TRACKER.log entry as a comma-separated 7th field. The Workflow tab's Prompts view shows "N files changed" on DONE prompts, expandable to see the full list. This creates a complete audit trail: prompt → commit → files changed.
 
 ### Concurrent Access Safety
 
@@ -446,7 +457,7 @@ Format expected: `scope:HHMM:MMDD:letter` (e.g., `viewer:1430:0409:a`)
 
 ### API Call
 
-If a Prompt ID is found, fire-and-forget PATCH to update status:
+If a Prompt ID is found, capture affected files and fire-and-forget PATCH to update status:
 
 ```bash
 if [ -n "$PROMPT_ID" ]; then
@@ -455,11 +466,14 @@ if [ -n "$PROMPT_ID" ]; then
   PORT_FILE="$PROJECT_ROOT/.ai-workflow/config/api-port"
   [ -f "$PORT_FILE" ] && API_PORT=$(cat "$PORT_FILE")
 
+  # Capture staged files for the audit trail
+  CHANGED_FILES=$(git diff --cached --name-only | tr '\n' ',' | sed 's/,$//')
+
   # Fire-and-forget — don't block the commit if HuminLoop is down
   curl -s -X PATCH \
     "http://127.0.0.1:${API_PORT}/api/workflow/prompts/${PROMPT_ID}" \
     -H "Content-Type: application/json" \
-    -d '{"status":"DONE"}' \
+    -d "{\"status\":\"DONE\",\"files\":\"${CHANGED_FILES}\"}" \
     --connect-timeout 2 \
     --max-time 5 \
     > /dev/null 2>&1 &
@@ -471,6 +485,7 @@ fi
 - Commits WITHOUT a Prompt ID → hook does nothing (silent skip)
 - HuminLoop not running → curl times out in background, commit proceeds normally
 - Multiple Prompt IDs in one commit → only the first is processed (one commit = one prompt)
+- Affected files are captured from `git diff --cached --name-only` and sent as a comma-separated string in the PATCH payload
 
 ### Port Discovery
 
