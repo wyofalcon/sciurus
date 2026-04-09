@@ -1877,3 +1877,19 @@ kbd {
 .mcp-setup-actions .btn-secondary {
   display: inline-block;
 }
+
+/* ── Plan Progress ── */
+
+.plan-progress { padding: 8px 0; border-top: 1px solid var(--border-mid); }
+.plan-label { font-size: 0.85em; margin-bottom: 4px; color: var(--text-dim); }
+.plan-bar { background: var(--bg-base); border-radius: 4px; height: 6px; overflow: hidden; margin-bottom: 6px; }
+.plan-bar-fill { background: #10b981; height: 100%; transition: width 0.3s; }
+.btn-sm { font-size: 0.75em; padding: 2px 8px; margin-right: 4px; border-radius: 4px; cursor: pointer; }
+.btn-danger { background: transparent; color: #ef4444; border: 1px solid #ef4444; }
+.btn-danger:hover { background: #ef444410; }
+.queue-plan-btn {
+  background: transparent; color: #8b5cf6; border: 1px solid #8b5cf6;
+  border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.85em;
+}
+.queue-plan-btn:hover { background: #8b5cf610; }
+.badge-queued { background: #8b5cf6; color: #fff; }

@@ -62,6 +62,10 @@ contextBridge.exposeInMainWorld('quickclip', {
   combineAndSendToIde: (clipIds, projectId) => ipcRenderer.invoke('combine-and-send-to-ide', clipIds, projectId),
   bundleAndSend: (clipId, scope) => ipcRenderer.invoke('bundle-and-send', clipId, scope),
   bundleAndSendMultiple: (clipIds, projectId, scope) => ipcRenderer.invoke('bundle-and-send-multiple', clipIds, projectId, scope),
+  queueAsPlan: (clipIds, projectId) => ipcRenderer.invoke('queue-as-plan', clipIds, projectId),
+  advancePlan: (planId) => ipcRenderer.invoke('advance-plan', planId),
+  cancelPlan: (planId) => ipcRenderer.invoke('cancel-plan', planId),
+  getActivePlans: () => ipcRenderer.invoke('get-active-plans'),
   onClipSentToIde: (cb) => ipcRenderer.on('clip-sent-to-ide', (_, data) => cb(data)),
 
   // Audit ledger

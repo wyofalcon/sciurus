@@ -19,6 +19,7 @@ const workflowContext = require('./workflow-context');
 
 // ── Prompt ID Generation ──
 let batchLetter = 0; // 0=a, 1=b, etc. Resets on restart.
+const activePlans = new Map(); // planId → { projectId, repoPath, tasks, currentIndex }
 
 function generatePromptId(scope) {
   const now = new Date();
@@ -46,6 +47,27 @@ function deriveScope(clip, project) {
     return project.name.toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 20);
   }
   return 'general';
+}
+
+function updatePromptStatus(repoPath, promptId, newStatus, files = null) {
+  const trackerPath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  try {
+    const raw = fs.readFileSync(trackerPath, 'utf8');
+    const lines = raw.split('\n');
+    const newLines = lines.map(line => {
+      if (line.startsWith(promptId + '|')) {
+        const parts = line.split('|');
+        parts[1] = newStatus;
+        if (files) {
+          while (parts.length < 7) parts.push('');
+          parts[6] = Array.isArray(files) ? files.join(',') : files;
+        }
+        return parts.join('|');
+      }
+      return line;
+    });
+    fs.writeFileSync(trackerPath, newLines.join('\n'), 'utf8');
+  } catch {}
 }
 
 function formatBundle(promptId, clip, bundle, annotationColors) {
@@ -1252,6 +1274,127 @@ ipcMain.handle('bundle-and-send-multiple', async (_, clipIds, projectId, scopeOv
   notifyMainWindow('clips-changed');
   notifyMainWindow('clip-sent-to-ide', { clipIds, promptId, projectName: project.name });
   return { success: true, promptId, path: project.repo_path };
+});
+
+// ── IPC Handlers: Queue as Plan ──
+
+ipcMain.handle('queue-as-plan', async (_, clipIds, projectId) => {
+  if (!Array.isArray(clipIds) || clipIds.length < 2) throw new Error('Need at least 2 clips for a plan');
+  if (!projectId) throw new Error('project_id required');
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const firstClip = await db.getClip(clipIds[0]);
+  const scope = deriveScope(firstClip, project);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const tasks = [];
+
+  // Generate prompt IDs for all tasks
+  const firstPromptId = generatePromptId(scope);
+  const planId = firstPromptId;
+
+  for (let i = 0; i < clipIds.length; i++) {
+    const clip = await db.getClip(clipIds[i]);
+    if (!clip) continue;
+
+    const promptId = i === 0 ? firstPromptId : generatePromptId(scope);
+    const status = i === 0 ? 'BUNDLED' : 'QUEUED';
+    const desc = `[Plan ${i + 1}/${clipIds.length}] ${(clip.comment || '(screenshot)').slice(0, 60)}`;
+
+    appendToPromptTracker(project.repo_path, promptId, desc, 'CRAFTED');
+    if (status === 'QUEUED') {
+      updatePromptStatus(project.repo_path, promptId, 'QUEUED');
+    }
+
+    await db.updateClip(clipIds[i], { sent_to_ide_at: i === 0 ? new Date().toISOString() : null });
+    tasks.push({ clipId: clipIds[i], promptId, status });
+  }
+
+  // Write only the first task's file
+  const bundle = workflowContext.assembleBundle(project.repo_path, firstClip, project);
+  const markdown = formatBundle(firstPromptId, firstClip, bundle, annotationColors);
+
+  const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+  if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+
+  const safeId = firstPromptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(clipIds[0]);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  activePlans.set(planId, { projectId, repoPath: project.repo_path, tasks, currentIndex: 0 });
+
+  addAuditEntry('queue-plan', `Plan ${planId}: ${tasks.length} tasks queued for ${project.name}`);
+  notifyMainWindow('clips-changed');
+  return { success: true, planId, taskCount: tasks.length };
+});
+
+ipcMain.handle('advance-plan', async (_, planId) => {
+  const plan = activePlans.get(planId);
+  if (!plan) throw new Error('Plan not found');
+
+  const nextIndex = plan.currentIndex + 1;
+  if (nextIndex >= plan.tasks.length) {
+    activePlans.delete(planId);
+    return { success: true, complete: true };
+  }
+
+  const task = plan.tasks[nextIndex];
+  const clip = await db.getClip(task.clipId);
+  const project = await db.getProject(plan.projectId);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const bundle = workflowContext.assembleBundle(plan.repoPath, clip, project);
+  const markdown = formatBundle(task.promptId, clip, bundle, annotationColors);
+
+  const contextDir = path.join(plan.repoPath, '.ai-workflow', 'context');
+  const safeId = task.promptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(task.clipId);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  updatePromptStatus(plan.repoPath, task.promptId, 'BUNDLED');
+  await db.updateClip(task.clipId, { sent_to_ide_at: new Date().toISOString() });
+  plan.currentIndex = nextIndex;
+
+  addAuditEntry('advance-plan', `Plan ${planId}: advanced to task ${nextIndex + 1}/${plan.tasks.length}`);
+  notifyMainWindow('clips-changed');
+  return { success: true, complete: false, currentTask: nextIndex + 1, totalTasks: plan.tasks.length };
+});
+
+ipcMain.handle('cancel-plan', async (_, planId) => {
+  const plan = activePlans.get(planId);
+  if (!plan) throw new Error('Plan not found');
+
+  for (let i = plan.currentIndex + 1; i < plan.tasks.length; i++) {
+    updatePromptStatus(plan.repoPath, plan.tasks[i].promptId, 'FAILED');
+  }
+
+  activePlans.delete(planId);
+  addAuditEntry('cancel-plan', `Plan ${planId}: cancelled`);
+  notifyMainWindow('clips-changed');
+  return { success: true };
+});
+
+ipcMain.handle('get-active-plans', async () => {
+  const plans = [];
+  for (const [planId, plan] of activePlans) {
+    plans.push({
+      planId,
+      projectId: plan.projectId,
+      tasks: plan.tasks.map(t => ({ clipId: t.clipId, promptId: t.promptId, status: t.status })),
+      currentIndex: plan.currentIndex,
+      totalTasks: plan.tasks.length,
+    });
+  }
+  return plans;
 });
 
 // ── IPC Handlers: AI Prompt ──

@@ -109,16 +109,19 @@ async function loadData() {
       const project = projects.find(p => p.id === selectedProjectId);
       ideStatus = await window.quickclip.detectIde(project?.repo_path);
       devPrompts = await window.quickclip.getWorkflowPrompts();
+      window._activePlans = await window.quickclip.getActivePlans();
       startDevPolling();
     } else {
       ideStatus = null;
       devPrompts = [];
+      window._activePlans = [];
       stopDevPolling();
     }
   } else {
     isDevMode = false;
     ideStatus = null;
     devPrompts = [];
+    window._activePlans = [];
     stopDevPolling();
   }
   updateModeLabel();
@@ -1181,6 +1184,7 @@ function renderProjectDetail(el) {
         ? `<button class="cap-btn small send-ide" onclick="bundleAndSendSelected()">Bundle &amp; Send to IDE</button>`
         : `<button class="cap-btn small send-ide" onclick="combineAndSendToIde()">Combine &amp; Send to IDE</button>`
       }
+      ${isDevMode && selectedClipIds.size >= 2 ? `<button class="queue-plan-btn" onclick="queueAsPlan()">Queue as Plan (${selectedClipIds.size} tasks)</button>` : ''}
       <button class="cancel-btn" onclick="clearSelection()">Clear</button>
     </div>`;
   }
@@ -2577,6 +2581,26 @@ function renderIdeConnectionSection() {
     html += `<div class="pending-badge">${pendingCount} prompt${pendingCount > 1 ? 's' : ''} pending</div>`;
   }
 
+  // Plan progress
+  const plans = window._activePlans || [];
+  plans.forEach(plan => {
+    const done = plan.tasks.filter(t => {
+      const p = devPrompts.find(dp => dp.id === t.promptId);
+      return p?.status === 'DONE';
+    }).length;
+    html += `<div class="plan-progress">`;
+    html += `<div class="plan-label">Plan: ${done}/${plan.totalTasks} tasks</div>`;
+    html += `<div class="plan-bar"><div class="plan-bar-fill" style="width:${(done / plan.totalTasks) * 100}%"></div></div>`;
+
+    const currentTask = plan.tasks[plan.currentIndex];
+    const currentPrompt = devPrompts.find(p => p.id === currentTask?.promptId);
+    if (currentPrompt?.status === 'DONE' && plan.currentIndex < plan.totalTasks - 1) {
+      html += `<button class="btn-primary btn-sm" onclick="advancePlan('${escAttr(plan.planId)}')">Send next task</button>`;
+    }
+    html += `<button class="btn-danger btn-sm" onclick="cancelPlan('${escAttr(plan.planId)}')">Cancel</button>`;
+    html += `</div>`;
+  });
+
   html += '</div>';
   return html;
 }
@@ -2686,6 +2710,43 @@ async function bundleAndSendSelected() {
   }
 }
 
+async function queueAsPlan() {
+  if (selectedClipIds.size < 2) return;
+  try {
+    const result = await window.quickclip.queueAsPlan([...selectedClipIds], selectedProjectId);
+    if (result.success) {
+      showToast(`Plan queued: ${result.taskCount} tasks`);
+      selectMode = false;
+      selectedClipIds.clear();
+      await loadData();
+      renderAll();
+    }
+  } catch (e) {
+    alert('Queue as Plan failed: ' + e.message);
+  }
+}
+
+async function advancePlan(planId) {
+  try {
+    await window.quickclip.advancePlan(planId);
+    await loadData();
+    renderAll();
+  } catch (e) {
+    alert('Advance failed: ' + e.message);
+  }
+}
+
+async function cancelPlan(planId) {
+  if (!confirm('Cancel remaining tasks?')) return;
+  try {
+    await window.quickclip.cancelPlan(planId);
+    await loadData();
+    renderAll();
+  } catch (e) {
+    alert('Cancel failed: ' + e.message);
+  }
+}
+
 // ── Dev Workflow Filters ──
 
 function setDevFilter(filter) {
@@ -2702,6 +2763,21 @@ function startDevPolling() {
     try {
       const oldPrompts = JSON.stringify(devPrompts);
       devPrompts = await window.quickclip.getWorkflowPrompts();
+
+      // Auto-advance plans if relay mode is auto
+      const plans = await window.quickclip.getActivePlans();
+      for (const plan of plans) {
+        const currentTask = plan.tasks[plan.currentIndex];
+        const prompt = devPrompts.find(p => p.id === currentTask?.promptId);
+        if (prompt?.status === 'DONE' && plan.currentIndex < plan.totalTasks - 1) {
+          const wfStatus = await window.quickclip.getWorkflowStatus();
+          if (wfStatus.relayMode === 'auto') {
+            await window.quickclip.advancePlan(plan.planId);
+          }
+        }
+      }
+      window._activePlans = plans;
+
       if (JSON.stringify(devPrompts) !== oldPrompts) {
         renderAll();
       }

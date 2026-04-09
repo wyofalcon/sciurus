@@ -1,5 +1,14 @@
 # Pre-Feature Audit Log
 
+## 2026-04-09 — Queue as Plan (Sequential Task Dispatch)
+
+- Plan dispatch reuses existing `formatBundle`, `generatePromptId`, `appendToPromptTracker`, `workflowContext.assembleBundle` — no new duplicated logic
+- New `updatePromptStatus()` helper edits PROMPT_TRACKER.log lines in-place; complements `appendToPromptTracker()` (append vs. update — no overlap)
+- Image write pattern (load → base64 → writeFile) repeated from `bundle-and-send` handler; acceptable since the context differs (plan tasks vs. single bundle)
+- `activePlans` is in-memory only (Map) — lost on app restart. Acceptable for v1; persistence could be added later via DB settings
+- No dead code introduced; all new functions are wired to IPC handlers and renderer calls
+- Recommendation: Consider extracting the IDE_PROMPT file write sequence (markdown + image) into a shared helper in a future pass, since it appears in `bundle-and-send`, `bundle-and-send-multiple`, and now `queue-as-plan` + `advance-plan`
+
 ## 2026-04-09 — Lite to Focused Rename + v2 Migration
 
 - Mechanical rename across 10 files — no duplicated logic introduced
