@@ -1,4 +1,4 @@
-// renderer/lite-capture.js — Lite mode capture popup
+// renderer/focused-capture.js — Focused mode capture popup
 
 let screenshotData = null;
 let windowMeta = null;

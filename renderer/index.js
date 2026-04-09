@@ -3,7 +3,7 @@
 // ── State ──
 
 let activeTab = 'general';
-let isLiteMode = false;
+let isFocusedMode = false;
 let clips = [];
 let categories = [];
 let projects = [];
@@ -43,30 +43,30 @@ let workflowSection = 'status';
   if (!hasKey) document.getElementById('noKeyBanner').style.display = 'block';
   appVersion = await window.quickclip.getAppVersion();
 
-  // Check if we're in lite mode
+  // Check if we're in focused mode
   const mode = await window.quickclip.getAppMode();
-  if (mode === 'lite') {
-    isLiteMode = true;
-    applyLiteMode();
+  if (mode === 'focused') {
+    isFocusedMode = true;
+    applyFocusedMode();
   }
 
   await loadData();
   renderAll();
 })();
 
-function applyLiteMode() {
+function applyFocusedMode() {
   // Hide General Notes and Workflow tabs
   document.querySelectorAll('.tab').forEach((btn) => {
     if (btn.dataset.tab === 'general' || btn.dataset.tab === 'workflow') {
       btn.style.display = 'none';
     }
   });
-  // Add "Lite Mode" label to header
+  // Add "Focused" label to header
   const h1 = document.querySelector('.header h1');
   if (h1) {
     const label = document.createElement('span');
-    label.className = 'lite-mode-label';
-    label.textContent = 'Lite Mode';
+    label.className = 'focused-mode-label';
+    label.textContent = 'Focused';
     h1.parentNode.insertBefore(label, h1.nextSibling);
   }
   // Force Projects tab active
@@ -83,14 +83,14 @@ async function loadData() {
     window.quickclip.getProjects(),
     window.quickclip.getSettings(),
   ]);
-  // In lite mode, auto-select the active project (or first project if none set)
-  if (isLiteMode && selectedProjectId === null) {
-    const liteProject = settings.lite_active_project;
-    if (liteProject) {
-      selectedProjectId = liteProject;
+  // In focused mode, auto-select the active project (or first project if none set)
+  if (isFocusedMode && selectedProjectId === null) {
+    const focusedProject = settings.focused_active_project;
+    if (focusedProject) {
+      selectedProjectId = focusedProject;
     } else if (projects.length > 0) {
       selectedProjectId = projects[0].id;
-      window.quickclip.setLiteActiveProject(projects[0].id);
+      window.quickclip.setFocusedActiveProject(projects[0].id);
     }
   }
 }
@@ -150,8 +150,8 @@ function escAttr(s) {
 // ── Tab Switching ──
 
 function switchTab(tab) {
-  // In lite mode, only allow projects, settings, and help tabs
-  if (isLiteMode && (tab === 'general' || tab === 'workflow')) return;
+  // In focused mode, only allow projects, settings, and help tabs
+  if (isFocusedMode && (tab === 'general' || tab === 'workflow')) return;
   activeTab = tab;
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
@@ -287,15 +287,15 @@ function renderGeneralSidebar(el) {
 
 function renderProjectsSidebar(el) {
   let html = '<div class="sec">Projects</div>';
-  // In lite mode, hide "All Projects" — user must select a single project
-  if (!isLiteMode) {
+  // In focused mode, hide "All Projects" — user must select a single project
+  if (!isFocusedMode) {
     html += `<button class="sb-btn ${selectedProjectId === null ? 'active' : ''}" onclick="selectProject(null)">
       <span>All Projects</span><span class="sb-count">${projects.length}</span></button>`;
   }
 
   projects.forEach((p) => {
     const active = selectedProjectId === p.id ? 'active' : '';
-    const ideIndicator = (p.active_in_ide || p.activeInIde) ? '<span class="ide-dot" title="Open in IDE">&#x1F7E2;</span>' : '';
+    const ideIndicator = (p.active_in_ide || p.activeInIde) ? '<span class="ide-dot" title="Connected via MCP">&#x1F7E2;</span>' : '';
     html += `<button class="sb-btn ${active}" onclick="selectProject(${p.id})" style="${selectedProjectId === p.id ? 'border-left:3px solid ' + esc(p.color) : ''}">
       <span><span class="proj-dot" style="background:${esc(p.color)}"></span>${esc(p.name)}${ideIndicator}</span>
       <span class="sb-count">${p.clipCount || 0}</span></button>`;
@@ -320,7 +320,7 @@ function renderSettingsSidebar(el) {
 }
 
 function renderHelpSidebar(el) {
-  if (isLiteMode) {
+  if (isFocusedMode) {
     el.innerHTML = `
       <div class="sec">Help</div>
       <button class="sb-btn active" onclick="scrollHelpTo('getting-started')">Getting Started</button>
@@ -354,14 +354,14 @@ function scrollHelpTo(id) {
 
 function renderHelpContent(el) {
   const ver = appVersion || { version: '?' };
-  if (isLiteMode) {
+  if (isFocusedMode) {
     el.innerHTML = `
       <div class="help-page">
-        <h2>Help — HuminLoop Lite Mode v${esc(ver.version)}</h2>
+        <h2>Help — HuminLoop Focused Mode v${esc(ver.version)}</h2>
 
         <div class="help-section" id="help-getting-started">
           <h3>Getting Started</h3>
-          <p>Lite Mode is designed for fast iteration during active development. Annotate your screen, type a short note,
+          <p>Focused Mode is designed for fast iteration during active development. Annotate your screen, type a short note,
           and get an AI-generated coding prompt you can paste directly into your AI coding tool.</p>
           <div class="help-steps">
             <div class="help-step"><span class="help-num">1</span>Select your active project in the sidebar</div>
@@ -410,7 +410,7 @@ function renderHelpContent(el) {
 
         <div class="help-section" id="help-projects">
           <h3>Projects</h3>
-          <p>Lite Mode is project-focused — select one project at a time in the sidebar. All captures go to the active project.</p>
+          <p>Focused Mode is project-focused — select one project at a time in the sidebar. All captures go to the active project.</p>
           <ul>
             <li><strong>Open in IDE</strong> — Mark a project as actively open in your IDE for visual tracking</li>
             <li><strong>Show/hide completed</strong> — Toggle the checkbox to filter out completed notes</li>
@@ -434,7 +434,7 @@ function renderHelpContent(el) {
         <div class="help-section" id="help-switching">
           <h3>Switching Modes</h3>
           <p>Right-click the HuminLoop tray icon and select <strong>Switch to Full Mode</strong> to access all features
-          (General Notes, Workflow tab, categories, window rules, and more).</p>
+          (General Notes, Workflow tab, categories, window rules, and more). From Full Mode, you can switch back to Focused Mode the same way.</p>
         </div>
       </div>
     `;
@@ -1057,9 +1057,9 @@ function renderProjectDetail(el) {
       ${ideActive ? '<span class="ide-badge">IN IDE</span>' : ''}
     </div>
     <div class="project-detail-actions">
-      <button class="sb-btn-action ${ideActive ? 'ide-active' : ''}" onclick="toggleIde(${proj.id})" title="${ideActive ? 'Mark as not open in IDE' : 'Mark as open in IDE'}">
-        ${ideActive ? '&#x1F7E2; In IDE' : '&#x2B55; Open in IDE'}
-      </button>
+      <span class="sb-btn-action ${ideActive ? 'ide-active' : ''}" title="${ideActive ? 'Connected via MCP' : 'No active IDE connection'}" style="cursor:default;opacity:${ideActive ? '1' : '0.5'}">
+        ${ideActive ? '&#x1F7E2; Connected' : '&#x26AA; Not Connected'}
+      </span>
       <button class="sb-btn-action ${selectMode ? 'select-active' : ''}" onclick="toggleSelectMode()" title="${selectMode ? 'Cancel selection' : 'Select clips to combine into one prompt'}">
         ${selectMode ? '&#x2715; Cancel' : '&#x2610; Select'}
       </button>
@@ -1180,19 +1180,15 @@ function setPromptFilter(value) {
   renderAll();
 }
 
-async function toggleIde(projectId) {
-  await window.quickclip.toggleProjectIde(projectId);
-}
-
 function selectProject(id) {
-  // In lite mode, must always have a project selected
-  if (isLiteMode && id === null) return;
+  // In focused mode, must always have a project selected
+  if (isFocusedMode && id === null) return;
   selectedProjectId = id;
   selectMode = false;
   selectedClipIds.clear();
-  // Sync active project setting in lite mode
-  if (isLiteMode && id !== null) {
-    window.quickclip.setLiteActiveProject(id);
+  // Sync active project setting in focused mode
+  if (isFocusedMode && id !== null) {
+    window.quickclip.setFocusedActiveProject(id);
   }
   renderAll();
 }
@@ -1604,7 +1600,7 @@ async function confirmDeleteProject(id) {
 function renderSettingsContent(el) {
   const general = settings.general || { openWindowOnLaunch: true, minimizeToTray: true, theme: 'dark' };
   const capture = settings.capture || { hotkey: 'ctrl+shift+q', watchClipboard: true, pollInterval: 500, autoCategory: true };
-  const aiSettings = settings.ai || { enabled: true, autoCategorizeonSave: true, retryUncategorizedOnStartup: true, autoCopyLitePrompt: false };
+  const aiSettings = settings.ai || { enabled: true, autoCategorizeonSave: true, retryUncategorizedOnStartup: true, autoCopyFocusedPrompt: false };
 
   const ver = appVersion || { version: '?', electron: '?', node: '?' };
 
@@ -1713,11 +1709,11 @@ function renderSettingsContent(el) {
         </div>
         <div class="setting-row">
           <div class="setting-info">
-            <div class="setting-label">Auto-copy lite prompt</div>
-            <div class="setting-desc">Copy the AI-generated prompt to clipboard automatically after lite capture</div>
+            <div class="setting-label">Auto-copy focused prompt</div>
+            <div class="setting-desc">Copy the AI-generated prompt to clipboard automatically after focused capture</div>
           </div>
           <label class="toggle">
-            <input type="checkbox" ${aiSettings.autoCopyLitePrompt ? 'checked' : ''} onchange="updateSetting('ai','autoCopyLitePrompt',this.checked)">
+            <input type="checkbox" ${aiSettings.autoCopyFocusedPrompt ? 'checked' : ''} onchange="updateSetting('ai','autoCopyFocusedPrompt',this.checked)">
             <span class="toggle-slider"></span>
           </label>
         </div>

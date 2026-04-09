@@ -115,7 +115,7 @@ JSON schema:
   "url": "string — extracted URL if visible, otherwise empty string"
 }`;
 
-const LITE_PROMPT = `You are analyzing a screenshot with colored annotations from a developer.
+const FOCUSED_PROMPT = `You are analyzing a screenshot with colored annotations from a developer.
 The annotations follow this color coding:
 - RED markings (circles, crosses, text): Remove, delete, or fix what is marked
 - GREEN markings (circles, highlights, text): Add or create something at this location
@@ -280,7 +280,7 @@ async function categorize(comment, categories, imageDataURL = null, projects = n
   }
 }
 
-async function generateLitePrompt(comment, imageDataURL, windowMeta = {}, project = {}, workflowContext = {}) {
+async function generateFocusedPrompt(comment, imageDataURL, windowMeta = {}, project = {}, workflowContext = {}) {
   if (!isEnabled()) return null;
 
   const parts = [];
@@ -304,11 +304,11 @@ async function generateLitePrompt(comment, imageDataURL, windowMeta = {}, projec
   messageParts.push({ text: userText });
 
   try {
-    const result = await callGemini(LITE_PROMPT, messageParts, { raw: true });
+    const result = await callGemini(FOCUSED_PROMPT, messageParts, { raw: true });
     if (!result) return null;
     return result.replace(/^["'`]+|["'`]+$/g, '').trim();
   } catch (e) {
-    console.error('[HuminLoop AI] Lite prompt generation failed:', e.message);
+    console.error('[HuminLoop AI] Focused prompt generation failed:', e.message);
     return null;
   }
 }
@@ -529,6 +529,6 @@ async function generateCombinedPrompt(notes) {
 }
 
 module.exports = {
-  init, isEnabled, categorize, generateLitePrompt, search, summarizeNotes, generateCombinedPrompt,
+  init, isEnabled, categorize, generateFocusedPrompt, search, summarizeNotes, generateCombinedPrompt,
   getCategorizePrompt, getPromptBlocks, setPromptBlocks, resetPromptBlocks, estimateTokens,
 };

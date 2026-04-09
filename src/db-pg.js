@@ -215,7 +215,7 @@ async function getClip(id) {
 
 async function saveClip(clip) {
   const categoryId = await getCategoryId(clip.category || 'Uncategorized');
-  const VALID_SOURCES = ['full', 'lite'];
+  const VALID_SOURCES = ['full', 'lite', 'focused'];
   const source = VALID_SOURCES.includes(clip.source) ? clip.source : 'full';
   await pool.query(
     `INSERT INTO clips (id, image, comment, category_id, project_id, tags, ai_summary, url, status, timestamp, source, window_title, process_name)
@@ -557,6 +557,10 @@ async function migrateFromStore(storeData) {
 // Helpers
 // ---------------------------------------------------------------------------
 
+async function runRaw(sql, params = []) {
+  return pool.query(sql, params);
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -565,6 +569,7 @@ module.exports = {
   init,
   close,
   isReady,
+  runRaw,
   // Clips
   getClips,
   getClip,

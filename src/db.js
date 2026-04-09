@@ -96,4 +96,6 @@ module.exports = {
   // Migration
   migrateFromStore: (...a) => backend.migrateFromStore(...a),
   migrateArchivedToTrash: (...a) => backend.migrateArchivedToTrash(...a),
+  // Raw SQL
+  runRaw: (...args) => backend.runRaw?.(...args),
 };

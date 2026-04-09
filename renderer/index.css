@@ -70,7 +70,7 @@ body {
 
 .header h1 { font-size: 18px; font-weight: 700; white-space: nowrap; }
 
-.lite-mode-label {
+.focused-mode-label {
   font-size: 14px;
   font-weight: 600;
   color: #4fc3f7;

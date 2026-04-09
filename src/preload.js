@@ -105,9 +105,9 @@ contextBridge.exposeInMainWorld('quickclip', {
   // App mode
   toggleAppMode: () => ipcRenderer.invoke('toggle-app-mode'),
   getAppMode: () => ipcRenderer.invoke('get-app-mode'),
-  getLiteClips: () => ipcRenderer.invoke('get-lite-clips'),
-  setLiteActiveProject: (projectId) => ipcRenderer.invoke('set-lite-active-project', projectId),
-  toggleProjectIde: (projectId) => ipcRenderer.invoke('toggle-project-ide', projectId),
+  getFocusedClips: () => ipcRenderer.invoke('get-focused-clips'),
+  setFocusedActiveProject: (projectId) => ipcRenderer.invoke('set-focused-active-project', projectId),
+  // toggleProjectIde removed — IDE connection auto-detected via MCP heartbeats
 
   // Setup wizard
   checkDocker: () => ipcRenderer.invoke('setup-check-docker'),

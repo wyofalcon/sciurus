@@ -124,6 +124,34 @@ async function getAppMode() {
   return mode || 'full';
 }
 
+// ── v2 Migration: Lite → Focused ──
+
+async function migrateV2() {
+  const done = await db.getSettings('migration_v2_done');
+  if (done) return;
+
+  console.log('[HuminLoop] Running v1 → v2 migration...');
+
+  // Migrate app_mode setting
+  const mode = await db.getSettings('app_mode');
+  if (mode === 'lite') {
+    await db.saveSetting('app_mode', 'focused');
+  }
+
+  // Migrate lite_active_project → focused_active_project
+  const liteProject = await db.getSettings('lite_active_project');
+  if (liteProject) {
+    await db.saveSetting('focused_active_project', liteProject);
+    await db.saveSetting('lite_active_project', null);
+  }
+
+  // Migrate clip source field
+  await db.runRaw(`UPDATE clips SET source = 'focused' WHERE source = 'lite'`);
+
+  await db.saveSetting('migration_v2_done', true);
+  console.log('[HuminLoop] v2 migration complete');
+}
+
 // ── First-Run Detection ──
 
 function isFirstRun() {
@@ -157,8 +185,8 @@ function createSetupWindow() {
 
 async function createMainWindow() {
   const mode = await getAppMode();
-  const htmlFile = 'index.html';  // Both modes use same renderer; lite mode hides tabs via JS
-  const windowSize = mode === 'lite' ? { width: 900, height: 700 } : { width: 1100, height: 750 };
+  const htmlFile = 'index.html';  // Both modes use same renderer; focused mode hides tabs via JS
+  const windowSize = mode === 'focused' ? { width: 900, height: 700 } : { width: 1100, height: 750 };
   mainWindow = new BrowserWindow({
     width: windowSize.width, height: windowSize.height, show: false,
     title: 'HuminLoop',
@@ -188,8 +216,8 @@ async function createCaptureWindow(imageDataURL, windowMeta = null) {
     return;
   }
   const mode = await getAppMode();
-  const htmlFile = mode === 'lite' ? 'lite-capture.html' : 'capture.html';
-  const captureSize = mode === 'lite' ? { width: 340, height: 420 } : { width: 460, height: 580 };
+  const htmlFile = mode === 'focused' ? 'focused-capture.html' : 'capture.html';
+  const captureSize = mode === 'focused' ? { width: 340, height: 420 } : { width: 460, height: 580 };
   const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
   captureWindow = new BrowserWindow({
     width: captureSize.width, height: captureSize.height,
@@ -476,7 +504,7 @@ function startClipboardWatcher() {
 async function rebuildTrayMenu() {
   if (!tray) return;
   const mode = await getAppMode();
-  const modeLabel = mode === 'lite' ? 'Switch to Full Mode' : 'Switch to Lite Mode';
+  const modeLabel = mode === 'focused' ? 'Switch to Full Mode' : 'Switch to Focused Mode';
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open HuminLoop', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
     { label: 'Quick Capture', click: async () => await createCaptureWindow(null) },
@@ -484,7 +512,7 @@ async function rebuildTrayMenu() {
     { type: 'separator' },
     { label: modeLabel, click: async () => {
       const current = await getAppMode();
-      const next = current === 'lite' ? 'full' : 'lite';
+      const next = current === 'focused' ? 'full' : 'focused';
       await db.saveSetting('app_mode', next);
       if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
       if (captureWindow && !captureWindow.isDestroyed()) { captureWindow.destroy(); captureWindow = null; }
@@ -568,9 +596,9 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
     if (result.summary) updates.aiSummary = result.summary;
     if (result.url) updates.url = result.url;
 
-    // AI-suggested project assignment (only if clip isn't already assigned and not in lite mode)
+    // AI-suggested project assignment (only if clip isn't already assigned and not in focused mode)
     const currentMode = await getAppMode();
-    if (result.project_id && (!clip || !clip.project_id) && currentMode !== 'lite') {
+    if (result.project_id && (!clip || !clip.project_id) && currentMode !== 'focused') {
       // Verify the project actually exists
       const proj = await db.getProject(result.project_id);
       if (proj) {
@@ -597,15 +625,15 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
   }
 }
 
-/** Run AI lite prompt generation in the background after a clip is saved in Lite mode. */
-async function autoCategorizeLite(clipId, comment, imageData, windowTitle, processName) {
+/** Run AI focused prompt generation in the background after a clip is saved in Focused mode. */
+async function autoCategorizeFocused(clipId, comment, imageData, windowTitle, processName) {
   try {
-    const projectId = await db.getSettings('lite_active_project');
+    const projectId = await db.getSettings('focused_active_project');
     const project = projectId ? await db.getProject(projectId) : {};
     const session = project.repo_path ? workflowContext.readSessionContext(project.repo_path) : null;
     const audit = project.repo_path ? workflowContext.readAuditFindings(project.repo_path) : null;
     const compressedImage = imageData ? images.compressForAI(imageData) : null;
-    const prompt = await ai.generateLitePrompt(
+    const prompt = await ai.generateFocusedPrompt(
       comment, compressedImage,
       { windowTitle, processName },
       { name: project.name, description: project.description, repo_path: project.repo_path },
@@ -614,19 +642,19 @@ async function autoCategorizeLite(clipId, comment, imageData, windowTitle, proce
     if (prompt) {
       await db.updateClip(clipId, { aiFixPrompt: prompt });
       notifyMainWindow('clips-changed');
-      console.log(`[HuminLoop] Lite prompt generated for clip ${clipId}`);
-      addAuditEntry('ai', `Lite prompt generated for clip ${clipId}`);
+      console.log(`[HuminLoop] Focused prompt generated for clip ${clipId}`);
+      addAuditEntry('ai', `Focused prompt generated for clip ${clipId}`);
 
       // Auto-copy to clipboard if enabled
       const aiSettings = await db.getSettings('ai');
-      if (aiSettings && aiSettings.autoCopyLitePrompt) {
+      if (aiSettings && aiSettings.autoCopyFocusedPrompt) {
         clipboard.writeText(prompt);
         notifyMainWindow('prompt-auto-copied');
-        console.log(`[HuminLoop] Lite prompt auto-copied to clipboard`);
+        console.log(`[HuminLoop] Focused prompt auto-copied to clipboard`);
       }
     }
   } catch (e) {
-    console.error('[HuminLoop] Lite prompt generation failed:', e.message);
+    console.error('[HuminLoop] Focused prompt generation failed:', e.message);
   }
 }
 
@@ -635,9 +663,9 @@ async function autoCategorizeLite(clipId, comment, imageData, windowTitle, proce
 ipcMain.handle('get-clips', () => db.getClips());
 ipcMain.handle('get-general-clips', () => db.getClips(null));
 ipcMain.handle('get-clips-for-project', (_, projectId) => db.getClips(projectId));
-ipcMain.handle('get-lite-clips', async () => {
-  const projectId = await db.getSettings('lite_active_project');
-  return db.getClips(projectId || undefined, 'lite');
+ipcMain.handle('get-focused-clips', async () => {
+  const projectId = await db.getSettings('focused_active_project');
+  return db.getClips(projectId || undefined, 'focused');
 });
 
 ipcMain.handle('save-clip', async (_, clip) => {
@@ -650,13 +678,13 @@ ipcMain.handle('save-clip', async (_, clip) => {
     clip.image = '__on_disk__';
   }
 
-  // Lite mode: inject source and active project
+  // Focused mode: inject source and active project
   const mode = await getAppMode();
-  if (mode === 'lite') {
-    clip.source = 'lite';
-    const liteProject = await db.getSettings('lite_active_project');
-    if (liteProject && !clip.project_id) {
-      clip.project_id = liteProject;
+  if (mode === 'focused') {
+    clip.source = 'focused';
+    const focusedProject = await db.getSettings('focused_active_project');
+    if (focusedProject && !clip.project_id) {
+      clip.project_id = focusedProject;
     }
   }
 
@@ -684,10 +712,10 @@ ipcMain.handle('save-clip', async (_, clip) => {
     // Always run standard categorization (summary, tags, category)
     autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
       .catch(e => console.error('[HuminLoop] Auto-categorize background error:', e.message));
-    // In lite mode, also generate the focused fix prompt
-    if (mode === 'lite') {
-      autoCategorizeLite(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
-        .catch(e => console.error('[HuminLoop] Lite prompt background error:', e.message));
+    // In focused mode, also generate the focused fix prompt
+    if (mode === 'focused') {
+      autoCategorizeFocused(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
+        .catch(e => console.error('[HuminLoop] Focused prompt background error:', e.message));
     }
   } else if (!ai.isEnabled()) {
     console.log('[HuminLoop] AI disabled — skipping categorization');
@@ -1098,7 +1126,7 @@ ipcMain.handle('get-app-mode', async () => await getAppMode());
 
 ipcMain.handle('toggle-app-mode', async () => {
   const current = await getAppMode();
-  const next = current === 'lite' ? 'full' : 'lite';
+  const next = current === 'focused' ? 'full' : 'focused';
   await db.saveSetting('app_mode', next);
   if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
   if (captureWindow && !captureWindow.isDestroyed()) { captureWindow.destroy(); captureWindow = null; }
@@ -1108,19 +1136,13 @@ ipcMain.handle('toggle-app-mode', async () => {
   return next;
 });
 
-ipcMain.handle('set-lite-active-project', async (_, projectId) => {
-  await db.saveSetting('lite_active_project', projectId);
+ipcMain.handle('set-focused-active-project', async (_, projectId) => {
+  await db.saveSetting('focused_active_project', projectId);
   return true;
 });
 
-ipcMain.handle('toggle-project-ide', async (_, projectId) => {
-  const project = await db.getProject(projectId);
-  if (!project) return null;
-  const newVal = !project.active_in_ide;
-  await db.updateProject(projectId, { active_in_ide: newVal });
-  notifyMainWindow('projects-changed');
-  return newVal;
-});
+// IDE connection state is now auto-detected via MCP heartbeats.
+// Manual toggle removed — active_in_ide is set/cleared by api-server heartbeat system.
 
 // ── IPC Handlers: Workflow ──
 
@@ -1168,7 +1190,9 @@ ipcMain.handle('get-workflow-prompts', async () => {
     if (!raw) return [];
     return raw.split('\n').map((line) => {
       const parts = line.split('|');
-      return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3], type: parts[4] || 'CRAFTED', parentId: parts[5] || null };
+      return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3],
+        type: parts[4] || 'CRAFTED', parentId: parts[5] || null,
+        files: parts[6] ? parts[6].split(',').filter(Boolean) : [] };
     }).reverse();
   } catch { return []; }
 });
@@ -1347,6 +1371,9 @@ async function launchMainApp() {
   }
   console.log(`[HuminLoop] Database backend: ${db.getBackendName()}`);
 
+  // v2 migration: rename lite → focused
+  await migrateV2();
+
   // One-time migration from electron-store
   await migrateIfNeeded();
 
@@ -1374,7 +1401,7 @@ async function launchMainApp() {
 
   // Start local HTTP API for MCP server / external tool access
   const { startApiServer } = require('./api-server');
-  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry });
+  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry, notifyMainWindow });
 
   // Auto-purge trash items older than 30 days
   db.purgeTrash(30).then((n) => {
