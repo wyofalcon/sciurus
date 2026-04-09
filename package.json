@@ -52,12 +52,14 @@
     },
     "nsis": {
       "oneClick": true,
-      "perMachine": false
+      "perMachine": false,
+      "include": "build/installer.nsh"
     },
     "files": [
       "src/**/*",
       "renderer/**/*",
       "scripts/**/*",
+      "workflow-templates/**/*",
       "package.json"
     ],
     "extraFiles": [

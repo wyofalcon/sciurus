@@ -734,11 +734,13 @@ async function autoCategorizeFocused(clipId, comment, imageData, windowTitle, pr
     const session = project.repo_path ? workflowContext.readSessionContext(project.repo_path) : null;
     const audit = project.repo_path ? workflowContext.readAuditFindings(project.repo_path) : null;
     const compressedImage = imageData ? images.compressForAI(imageData) : null;
+    const annotationColors = await db.getSettings('annotation_colors');
     const prompt = await ai.generateFocusedPrompt(
       comment, compressedImage,
       { windowTitle, processName },
       { name: project.name, description: project.description, repo_path: project.repo_path },
-      { session, audit }
+      { session, audit },
+      annotationColors
     );
     if (prompt) {
       await db.updateClip(clipId, { aiFixPrompt: prompt });
@@ -1008,6 +1010,16 @@ ipcMain.handle('get-settings', () => db.getAllSettings());
 ipcMain.handle('get-setting', (_, key) => db.getSettings(key));
 ipcMain.handle('save-setting', async (_, key, value) => {
   await db.saveSetting(key, value);
+  return true;
+});
+
+ipcMain.handle('get-annotation-colors', async () => {
+  const colors = await db.getSettings('annotation_colors');
+  return colors || null;
+});
+
+ipcMain.handle('save-annotation-colors', async (_, colors) => {
+  await db.saveSetting('annotation_colors', colors);
   return true;
 });
 
@@ -1394,6 +1406,26 @@ ipcMain.handle('get-workflow-prompts', async () => {
 ipcMain.handle('get-workflow-audits', async () => {
   const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'AUDIT_LOG.md');
   try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+});
+
+ipcMain.handle('init-dev-workflow', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const apiPort = parseInt(process.env.HUMINLOOP_API_PORT || '7277', 10);
+  const result = workflowContext.scaffoldWorkflow(project.repo_path, project.name, apiPort);
+
+  if (result.success) {
+    addAuditEntry('workflow-init', `Dev workflow initialized for ${project.name} at ${project.repo_path}`);
+    notifyMainWindow('projects-changed');
+  }
+  return result;
+});
+
+ipcMain.handle('has-project-workflow', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project?.repo_path) return false;
+  return workflowContext.hasWorkflow(project.repo_path);
 });
 
 // ── IPC Handlers: Window Controls ──

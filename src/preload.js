@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld('quickclip', {
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   saveSetting: (key, value) => ipcRenderer.invoke('save-setting', key, value),
 
+  // Annotation Colors
+  getAnnotationColors: () => ipcRenderer.invoke('get-annotation-colors'),
+  saveAnnotationColors: (colors) => ipcRenderer.invoke('save-annotation-colors', colors),
+
   // AI
   aiCategorize: (comment, imageData) => ipcRenderer.invoke('ai-categorize', comment, imageData),
   aiSearch: (query) => ipcRenderer.invoke('ai-search', query),
@@ -71,6 +75,8 @@ contextBridge.exposeInMainWorld('quickclip', {
   toggleRelayMode: () => ipcRenderer.invoke('toggle-relay-mode'),
   toggleAuditWatch: () => ipcRenderer.invoke('toggle-audit-watch'),
   getWorkflowAudits: () => ipcRenderer.invoke('get-workflow-audits'),
+  initDevWorkflow: (projectId) => ipcRenderer.invoke('init-dev-workflow', projectId),
+  hasProjectWorkflow: (projectId) => ipcRenderer.invoke('has-project-workflow', projectId),
 
   // App info
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
