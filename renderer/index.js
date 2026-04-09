@@ -29,6 +29,13 @@ let promptFilter = 'all'; // 'all' | 'with-prompt' | 'no-prompt'
 let selectMode = false;
 let selectedClipIds = new Set();
 
+// Dev mode state
+let isDevMode = false;
+let ideStatus = null;
+let devPrompts = [];
+let devFilter = 'all'; // 'all' | 'pending' | 'done'
+let devPollInterval = null;
+
 // Workflow tab state
 let workflowStatus = null;
 let workflowChangelog = null;
@@ -66,6 +73,7 @@ function applyFocusedMode() {
   if (h1) {
     const label = document.createElement('span');
     label.className = 'focused-mode-label';
+    label.id = 'mode-label';
     label.textContent = 'Focused';
     h1.parentNode.insertBefore(label, h1.nextSibling);
   }
@@ -92,6 +100,34 @@ async function loadData() {
       selectedProjectId = projects[0].id;
       window.quickclip.setFocusedActiveProject(projects[0].id);
     }
+  }
+
+  // Dev mode detection
+  if (isFocusedMode && selectedProjectId) {
+    isDevMode = await window.quickclip.hasProjectWorkflow(selectedProjectId);
+    if (isDevMode) {
+      const project = projects.find(p => p.id === selectedProjectId);
+      ideStatus = await window.quickclip.detectIde(project?.repo_path);
+      devPrompts = await window.quickclip.getWorkflowPrompts();
+      startDevPolling();
+    } else {
+      ideStatus = null;
+      devPrompts = [];
+      stopDevPolling();
+    }
+  } else {
+    isDevMode = false;
+    ideStatus = null;
+    devPrompts = [];
+    stopDevPolling();
+  }
+  updateModeLabel();
+}
+
+function updateModeLabel() {
+  const label = document.getElementById('mode-label');
+  if (label) {
+    label.textContent = isDevMode ? 'Focused \u2014 Dev' : 'Focused';
   }
 }
 
@@ -302,6 +338,9 @@ function renderProjectsSidebar(el) {
   });
 
   html += `<button class="sb-btn sb-add" onclick="showNewProjectDialog()">+ New Project</button>`;
+
+  // IDE Connection section (focused mode only)
+  html += renderIdeConnectionSection();
 
   html += '<div class="sec" style="margin-top:12px">Trash</div>';
   html += `<button class="sb-btn ${showTrash ? 'active' : ''}" onclick="toggleTrash()" title="View recently deleted notes">
@@ -1048,6 +1087,15 @@ function renderProjectDetail(el) {
     projectClips = projectClips.filter((c) => !c.aiFixPrompt);
   }
 
+  // Dev workflow filter (only in dev mode)
+  if (isDevMode && devFilter !== 'all') {
+    if (devFilter === 'pending') {
+      projectClips = projectClips.filter(c => !c.sentToIdeAt || !c.completedAt);
+    } else if (devFilter === 'done') {
+      projectClips = projectClips.filter(c => c.completedAt);
+    }
+  }
+
   const ideActive = proj.active_in_ide || proj.activeInIde;
 
   let html = `<div class="project-detail-header">
@@ -1087,6 +1135,16 @@ function renderProjectDetail(el) {
     html += `</div>`;
   }
 
+  if (isDevMode) {
+    const pendingCount = projectClips.filter(c => !c.completedAt).length;
+    const doneCount = projectClips.filter(c => c.completedAt).length;
+    html += `<div class="dev-filter-bar">
+      <button class="filter-btn${devFilter === 'all' ? ' active' : ''}" onclick="setDevFilter('all')">All</button>
+      <button class="filter-btn${devFilter === 'pending' ? ' active' : ''}" onclick="setDevFilter('pending')">Pending (${pendingCount})</button>
+      <button class="filter-btn${devFilter === 'done' ? ' active' : ''}" onclick="setDevFilter('done')">Done (${doneCount})</button>
+    </div>`;
+  }
+
   if (proj.description) {
     html += `<div class="project-desc">${esc(proj.description)}</div>`;
   }
@@ -1119,7 +1177,10 @@ function renderProjectDetail(el) {
     html += `<div class="combine-bar">
       <span>${selectedClipIds.size} clip${selectedClipIds.size > 1 ? 's' : ''} selected</span>
       <button class="cap-btn small" onclick="combineSelectedPrompt()">Combine Prompt</button>
-      <button class="cap-btn small send-ide" onclick="combineAndSendToIde()">Combine & Send to IDE</button>
+      ${isDevMode
+        ? `<button class="cap-btn small send-ide" onclick="bundleAndSendSelected()">Bundle &amp; Send to IDE</button>`
+        : `<button class="cap-btn small send-ide" onclick="combineAndSendToIde()">Combine &amp; Send to IDE</button>`
+      }
       <button class="cancel-btn" onclick="clearSelection()">Clear</button>
     </div>`;
   }
@@ -1180,15 +1241,29 @@ function setPromptFilter(value) {
   renderAll();
 }
 
-function selectProject(id) {
+async function selectProject(id) {
   // In focused mode, must always have a project selected
   if (isFocusedMode && id === null) return;
   selectedProjectId = id;
   selectMode = false;
   selectedClipIds.clear();
+  devFilter = 'all';
   // Sync active project setting in focused mode
   if (isFocusedMode && id !== null) {
     window.quickclip.setFocusedActiveProject(id);
+    // Re-detect dev mode for the new project
+    isDevMode = await window.quickclip.hasProjectWorkflow(id);
+    if (isDevMode) {
+      const project = projects.find(p => p.id === id);
+      ideStatus = await window.quickclip.detectIde(project?.repo_path);
+      devPrompts = await window.quickclip.getWorkflowPrompts();
+      startDevPolling();
+    } else {
+      ideStatus = null;
+      devPrompts = [];
+      stopDevPolling();
+    }
+    updateModeLabel();
   }
   renderAll();
 }
@@ -1239,7 +1314,11 @@ async function combineSelectedPrompt() {
       <div class="combine-result">${esc(prompt || 'No prompt generated.')}</div>
       <div class="combine-actions">
         <button class="cap-btn small" onclick="copyCombinedPrompt()">Copy</button>
-        ${selectedProjectId ? `<button class="cap-btn small send-ide" onclick="sendCombinedResultToIde()">Send to IDE</button>` : ''}
+        ${selectedProjectId
+          ? (isDevMode
+              ? `<button class="cap-btn small send-ide" onclick="bundleAndSendSelected()">Bundle &amp; Send</button>`
+              : `<button class="cap-btn small send-ide" onclick="sendCombinedResultToIde()">Send to IDE</button>`)
+          : ''}
         <button class="cancel-btn" onclick="document.getElementById('combineOverlay').remove()">Close</button>
       </div>
     </div>`;
@@ -1719,6 +1798,8 @@ function renderSettingsContent(el) {
         </div>
       </div>
 
+      ${renderAnnotationColorSettings()}
+
       <div class="settings-section">
         <h3>AI Instructions</h3>
         <p class="setting-desc">Toggle which instructions the AI follows when categorizing. Disabling blocks reduces token usage and API cost.</p>
@@ -1786,6 +1867,78 @@ async function updateSetting(section, key, value) {
   current[key] = value;
   settings[section] = current;
   await window.quickclip.saveSetting(section, current);
+}
+
+// ── Annotation Color Settings ──
+
+function renderAnnotationColorSettings() {
+  const colors = settings.annotation_colors || [
+    { id: 'red', hex: '#FF0000', label: 'Delete / Remove / Error', shortLabel: 'remove' },
+    { id: 'green', hex: '#00FF00', label: 'Add / Insert', shortLabel: 'add' },
+    { id: 'pink', hex: '#FF69B4', label: 'Identify / Reference / Question', shortLabel: 'reference' },
+  ];
+
+  let html = '<div class="settings-section"><h3>Annotation Colors</h3>';
+  html += '<p class="settings-hint">Define colors used in screenshot annotations. These labels are used by AI when interpreting your markings.</p>';
+  html += '<div id="annotation-colors-list">';
+
+  colors.forEach((c, i) => {
+    html += `<div class="annotation-color-row" data-index="${i}">`;
+    html += `<input type="color" value="${escAttr(c.hex)}" onchange="updateAnnotationColor(${i}, 'hex', this.value)" />`;
+    html += `<input type="text" value="${escAttr(c.id)}" placeholder="ID (e.g. red)" class="color-id-input" onchange="updateAnnotationColor(${i}, 'id', this.value)" />`;
+    html += `<input type="text" value="${escAttr(c.label)}" placeholder="Label" class="color-label-input" onchange="updateAnnotationColor(${i}, 'label', this.value)" />`;
+    html += `<input type="text" value="${escAttr(c.shortLabel)}" placeholder="Short" class="color-short-input" onchange="updateAnnotationColor(${i}, 'shortLabel', this.value)" />`;
+    if (i > 0) html += `<button class="color-move-btn" onclick="moveAnnotationColor(${i}, -1)" title="Move up">&uarr;</button>`;
+    if (i < colors.length - 1) html += `<button class="color-move-btn" onclick="moveAnnotationColor(${i}, 1)" title="Move down">&darr;</button>`;
+    html += `<button class="del-btn" onclick="removeAnnotationColor(${i})" title="Remove">&times;</button>`;
+    html += `</div>`;
+  });
+
+  html += '</div>';
+  html += '<button class="btn-secondary" onclick="addAnnotationColor()">+ Add Color</button>';
+  html += '</div>';
+  return html;
+}
+
+async function updateAnnotationColor(index, field, value) {
+  const colors = settings.annotation_colors || [
+    { id: 'red', hex: '#FF0000', label: 'Delete / Remove / Error', shortLabel: 'remove' },
+    { id: 'green', hex: '#00FF00', label: 'Add / Insert', shortLabel: 'add' },
+    { id: 'pink', hex: '#FF69B4', label: 'Identify / Reference / Question', shortLabel: 'reference' },
+  ];
+  colors[index][field] = value;
+  await window.quickclip.saveAnnotationColors(colors);
+  settings.annotation_colors = colors;
+}
+
+async function addAnnotationColor() {
+  const colors = settings.annotation_colors || [
+    { id: 'red', hex: '#FF0000', label: 'Delete / Remove / Error', shortLabel: 'remove' },
+    { id: 'green', hex: '#00FF00', label: 'Add / Insert', shortLabel: 'add' },
+    { id: 'pink', hex: '#FF69B4', label: 'Identify / Reference / Question', shortLabel: 'reference' },
+  ];
+  colors.push({ id: 'new', hex: '#808080', label: 'New color', shortLabel: 'new' });
+  await window.quickclip.saveAnnotationColors(colors);
+  settings.annotation_colors = colors;
+  renderAll();
+}
+
+async function removeAnnotationColor(index) {
+  const colors = settings.annotation_colors || [];
+  colors.splice(index, 1);
+  await window.quickclip.saveAnnotationColors(colors);
+  settings.annotation_colors = colors;
+  renderAll();
+}
+
+async function moveAnnotationColor(index, direction) {
+  const colors = settings.annotation_colors || [];
+  const newIndex = index + direction;
+  if (newIndex < 0 || newIndex >= colors.length) return;
+  [colors[index], colors[newIndex]] = [colors[newIndex], colors[index]];
+  await window.quickclip.saveAnnotationColors(colors);
+  settings.annotation_colors = colors;
+  renderAll();
 }
 
 // ── AI Prompt Blocks ──
@@ -1976,10 +2129,18 @@ function renderClipCard(c, inProject, allKnownTags) {
   if (c.aiFixPrompt) {
     html += `<button class="copy-prompt-btn" onclick="copyPrompt('${id}')" title="Copy AI fix prompt to clipboard">&#x1F4CB; Prompt</button>`;
     if (c.project_id) {
-      if (c.sentToIdeAt) {
-        html += `<button class="send-ide-btn sent" onclick="sendClipToIde('${id}')" title="Sent to IDE ${timeAgo(new Date(c.sentToIdeAt).getTime())} — click to resend">&#x2705; Sent</button>`;
+      if (isDevMode) {
+        if (c.sentToIdeAt) {
+          html += `<button class="send-ide-btn sent" onclick="bundleAndSend('${id}')" title="Bundled ${timeAgo(new Date(c.sentToIdeAt).getTime())} — click to resend">&#x2705; Bundled</button>`;
+        } else {
+          html += `<button class="bundle-send-btn" onclick="bundleAndSend('${id}')" title="Bundle context and send to IDE">&#x1F4E6; Bundle &amp; Send</button>`;
+        }
       } else {
-        html += `<button class="send-ide-btn" onclick="sendClipToIde('${id}')" title="Send prompt to IDE AI chat">&#x1F4E4; IDE</button>`;
+        if (c.sentToIdeAt) {
+          html += `<button class="send-ide-btn sent" onclick="sendClipToIde('${id}')" title="Sent to IDE ${timeAgo(new Date(c.sentToIdeAt).getTime())} — click to resend">&#x2705; Sent</button>`;
+        } else {
+          html += `<button class="send-ide-btn" onclick="sendClipToIde('${id}')" title="Send prompt to IDE AI chat">&#x1F4E4; IDE</button>`;
+        }
       }
     }
   }
@@ -2376,5 +2537,204 @@ async function removeTag(id, tag) {
   await window.quickclip.updateClip(id, { tags: clip.tags });
   renderAll();
 }
+
+// ── IDE Connection Sidebar ──
+
+function renderIdeConnectionSection() {
+  if (!isFocusedMode) return '';
+  const project = projects.find(p => p.id === selectedProjectId);
+  if (!project?.repo_path) return '';
+
+  let html = '<div class="sidebar-section ide-connection">';
+  html += '<div class="sec">IDE Connection</div>';
+
+  if (!isDevMode) {
+    html += `<p class="sidebar-hint">No dev workflow found.</p>`;
+    html += `<button class="btn-primary" onclick="initDevWorkflow(${project.id})">Set up Dev Workflow</button>`;
+    html += '</div>';
+    return html;
+  }
+
+  if (!ideStatus) {
+    html += '<p class="sidebar-hint">Checking IDE...</p>';
+  } else if (!ideStatus.vsCodeInstalled) {
+    html += '<p class="sidebar-hint">VS Code not found.</p>';
+  } else if (!ideStatus.claudeCodeExtension) {
+    html += '<p class="sidebar-hint">Claude Code extension not installed.</p>';
+  } else if (!ideStatus.mcpConfigured) {
+    html += '<p class="sidebar-hint">VS Code + Claude Code found.</p>';
+    html += `<button class="btn-primary" onclick="showMcpSetup(${project.id})">Connect HuminLoop</button>`;
+  } else {
+    const connected = project.active_in_ide || project.activeInIde;
+    const dotClass = connected ? 'ide-dot-green' : 'ide-dot-gray';
+    const label = connected ? 'Connected' : 'Waiting for connection...';
+    html += `<div class="ide-status"><span class="ide-dot ${dotClass}"></span> ${label}</div>`;
+  }
+
+  // Pending prompt count
+  const pendingCount = devPrompts.filter(p => p.status !== 'DONE' && p.status !== 'FAILED').length;
+  if (pendingCount > 0) {
+    html += `<div class="pending-badge">${pendingCount} prompt${pendingCount > 1 ? 's' : ''} pending</div>`;
+  }
+
+  html += '</div>';
+  return html;
+}
+
+// ── Dev Workflow Functions ──
+
+async function initDevWorkflow(projectId) {
+  try {
+    const result = await window.quickclip.initDevWorkflow(projectId);
+    if (result.success) {
+      await loadData();
+      renderAll();
+    } else if (result.reason === 'already_exists') {
+      showToast('Dev workflow already exists for this project.');
+    }
+  } catch (e) {
+    alert('Failed to initialize dev workflow: ' + e.message);
+  }
+}
+
+async function showMcpSetup(projectId) {
+  try {
+    const config = await window.quickclip.generateMcpConfig(projectId);
+    const configJson = JSON.stringify(config, null, 2);
+    const project = projects.find(p => p.id === projectId);
+    const mcpPath = project.repo_path.replace(/\\/g, '/') + '/.vscode/mcp.json';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'mcp-setup-overlay';
+    overlay.innerHTML = `
+      <div class="mcp-setup-panel">
+        <h3>Connect HuminLoop to VS Code</h3>
+        <p>Write to <code>${esc(mcpPath)}</code>:</p>
+        <pre class="mcp-config-preview">${esc(configJson)}</pre>
+        <div class="mcp-setup-actions">
+          <button class="btn-primary" onclick="applyMcpConfig(${projectId})">Apply</button>
+          <button class="btn-secondary" onclick="copyMcpConfig()">Copy</button>
+          <button class="btn-secondary" onclick="closeMcpSetup()">Cancel</button>
+        </div>
+      </div>
+    `;
+    overlay.id = 'mcp-setup-overlay';
+    document.body.appendChild(overlay);
+    window._pendingMcpConfig = configJson;
+  } catch (e) {
+    alert('Failed to generate MCP config: ' + e.message);
+  }
+}
+
+async function applyMcpConfig(projectId) {
+  try {
+    await window.quickclip.writeMcpConfig(projectId);
+    closeMcpSetup();
+    const project = projects.find(p => p.id === projectId);
+    ideStatus = await window.quickclip.detectIde(project?.repo_path);
+    renderAll();
+  } catch (e) {
+    alert('Failed to write MCP config: ' + e.message);
+  }
+}
+
+function copyMcpConfig() {
+  if (window._pendingMcpConfig) {
+    navigator.clipboard.writeText(window._pendingMcpConfig);
+    showToast('MCP config copied to clipboard');
+  }
+}
+
+function closeMcpSetup() {
+  const overlay = document.getElementById('mcp-setup-overlay');
+  if (overlay) overlay.remove();
+  delete window._pendingMcpConfig;
+}
+
+// ── Bundle & Send (Dev Mode) ──
+
+async function bundleAndSend(clipId) {
+  try {
+    const result = await window.quickclip.bundleAndSend(clipId);
+    if (result.success) {
+      showToast('Bundled and sent to IDE');
+      await loadData();
+      renderAll();
+    }
+  } catch (e) {
+    console.error('Bundle & Send failed:', e.message);
+    showToast('Bundle & Send failed: ' + e.message);
+  }
+}
+
+async function bundleAndSendSelected() {
+  if (selectedClipIds.size === 0) return;
+  try {
+    const result = await window.quickclip.bundleAndSendMultiple(
+      [...selectedClipIds], selectedProjectId
+    );
+    if (result.success) {
+      showToast('Bundled and sent to IDE');
+      selectMode = false;
+      selectedClipIds.clear();
+      await loadData();
+      renderAll();
+    }
+  } catch (e) {
+    console.error('Bundle & Send failed:', e.message);
+    showToast('Bundle & Send failed: ' + e.message);
+  }
+}
+
+// ── Dev Workflow Filters ──
+
+function setDevFilter(filter) {
+  devFilter = filter;
+  renderAll();
+}
+
+// ── Dev Polling ──
+
+function startDevPolling() {
+  if (devPollInterval) return;
+  devPollInterval = setInterval(async () => {
+    if (!isDevMode || !isFocusedMode) return;
+    try {
+      const oldPrompts = JSON.stringify(devPrompts);
+      devPrompts = await window.quickclip.getWorkflowPrompts();
+      if (JSON.stringify(devPrompts) !== oldPrompts) {
+        renderAll();
+      }
+    } catch (e) {
+      console.error('Dev poll failed:', e.message);
+    }
+  }, 12000);
+}
+
+function stopDevPolling() {
+  if (devPollInterval) {
+    clearInterval(devPollInterval);
+    devPollInterval = null;
+  }
+}
+
+// ── Refresh on Window Focus ──
+
+window.addEventListener('focus', async () => {
+  if (isFocusedMode && selectedProjectId) {
+    try {
+      isDevMode = await window.quickclip.hasProjectWorkflow(selectedProjectId);
+      if (isDevMode) {
+        const project = projects.find(p => p.id === selectedProjectId);
+        ideStatus = await window.quickclip.detectIde(project?.repo_path);
+        devPrompts = await window.quickclip.getWorkflowPrompts();
+      }
+      updateModeLabel();
+      renderAll();
+    } catch (e) {
+      console.error('Focus refresh failed:', e.message);
+    }
+  }
+});
 
 // end of file
