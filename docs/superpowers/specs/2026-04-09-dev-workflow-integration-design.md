@@ -2,7 +2,8 @@
 
 **Date:** 2026-04-09
 **Status:** Approved
-**Scope:** Integrate multi-agent AI dev workflow into HuminLoop lite mode
+**Version:** HuminLoop v2.0.0
+**Scope:** Integrate multi-agent AI dev workflow into HuminLoop Focused mode
 
 ---
 
@@ -14,26 +15,26 @@ HuminLoop becomes the **context aggregator and delivery system** for a multi-age
 
 - **No new API costs.** Context bundling is pure file reads + existing Gemini annotation interpretation.
 - **Convention over configuration.** Dev features activate automatically when `.ai-workflow/` exists in a project's repo path.
-- **MCP-only IDE support.** No fallback for IDEs without MCP servers. Claude Code is the first (and initially only) supported IDE.
+- **MCP-only IDE support.** No fallback for IDEs without MCP servers. VScode + Claude Code extension  is the first (and initially only) supported IDE.
 - **Shell script compatibility.** HuminLoop reads/writes the same file formats as the existing `.ai-workflow/scripts/`. Both can coexist.
 
 ### Two Modes
 
 - **Full** — General knowledge capture. Unchanged.
-- **Lite** — Project-focused capture. When the active project's `repo_path` contains `.ai-workflow/`, dev workflow features activate automatically. The clip list becomes a prompt pipeline with lifecycle tracking.
+- **Focused** — Project-focused capture (renamed from "Lite"). When the active project's `repo_path` contains `.ai-workflow/`, dev workflow features activate automatically. The clip list becomes a prompt pipeline with lifecycle tracking.
 
 ---
 
 ## 2. Context Bundle
 
-When a user clicks "Bundle & Send" on a clip (or multi-selected clips) in lite mode with dev features active, HuminLoop assembles a structured context bundle.
+When a user clicks "Bundle & Send" on a clip (or multi-selected clips) in Focused mode with dev features active, HuminLoop assembles a structured context bundle.
 
 ### Bundle Contents
 
 | Source | Data | Implementation |
 |--------|------|----------------|
 | Capture | Screenshot image | Existing — saved on disk |
-| Capture | Annotation color interpretation | Existing — `ai.generateLitePrompt()` output, with dynamic color labels |
+| Capture | Annotation color interpretation | Existing — `ai.generateFocusedPrompt()` output, with dynamic color labels |
 | Capture | User's note (raw intent) | Existing — clip `comment` field |
 | Project | Active project name, repo_path | Existing — DB project record |
 | Git | Current branch, last 5 commits, dirty file list | **New** — `workflow-context.js` gets `getGitState(repoPath)` |
@@ -52,7 +53,7 @@ When a user clicks "Bundle & Send" on a clip (or multi-selected clips) in lite m
 [raw note from capture]
 
 ## AI Interpretation
-[output from generateLitePrompt() — annotation-aware coding prompt]
+[output from generateFocusedPrompt() — annotation-aware coding prompt]
 
 ## Screenshot
 [attached separately as ide-prompt-image-{promptId}.png]
@@ -109,7 +110,7 @@ Moves from shell script (`prompt-tracker.sh`) to JavaScript in main.js. Same for
 
 ## 3. Clip List as Prompt Pipeline
 
-In lite mode with dev features active, the existing clip list gains workflow state inline. No separate view.
+In Focused mode with dev features active, the existing clip list gains workflow state inline. No separate view.
 
 ### Clip Card Enrichments
 
@@ -124,7 +125,7 @@ In lite mode with dev features active, the existing clip list gains workflow sta
 
 | Element | Behavior |
 |---------|----------|
-| **Mode label** | "Lite Mode — Dev" when dev features active |
+| **Mode label** | "Focused — Dev" when dev features active |
 | **IDE connection indicator** | Green dot = Claude Code heartbeated within 60s. Gray = disconnected |
 | **Pending prompt count** | Badge showing BUNDLED + SENT count |
 | **IDE Connection section** | Sidebar section with detect/config/status (see Section 5) |
@@ -145,7 +146,7 @@ Select multiple clips → "Bundle & Send" combines their context into one payloa
 ### Status Transitions
 
 ```
-CAPTURED  — Clip saved, AI annotation interpretation runs (existing lite flow)
+CAPTURED  — Clip saved, AI annotation interpretation runs (existing Focused flow)
     ↓ user clicks "Bundle & Send"
 BUNDLED   — Context bundle assembled, IDE_PROMPT_{id}.md written, PROMPT_TRACKER logged
     ↓ Architect calls MCP get_pending_prompt
@@ -211,16 +212,16 @@ ID|STATUS|TIMESTAMP|DESCRIPTION|TYPE|PARENT_ID
 
 ---
 
-## 5. IDE Auto-Detection & Setup (Claude Code)
+## 5. IDE Auto-Detection & Setup (VS Code + Claude Code Extension)
 
 ### Detection Logic
 
-1. Check for `claude` CLI on PATH (`claude --version`)
-2. Check for Claude Code config at project level: `{repo_path}/.claude/settings.json`
-3. Check for user-level config: `~/.claude.json`
+1. Check for VS Code installation: look for `code` CLI on PATH (`code --version`)
+2. Check for Claude Code extension: scan `~/.vscode/extensions/` for `anthropic.claude-code-*` directory
+3. Check for project-level MCP config: `{repo_path}/.vscode/mcp.json`
 4. If config found, check whether `huminloop` MCP server is already registered
 
-### UI — IDE Connection Section (Lite Sidebar)
+### UI — IDE Connection Section (Focused Mode Sidebar)
 
 Visible only when dev features are active (`.ai-workflow/` detected).
 
@@ -228,19 +229,19 @@ Visible only when dev features are active (`.ai-workflow/` detected).
 
 | State | Display |
 |-------|---------|
-| Not detected | "Claude Code not found." + install guidance |
-| Detected, not configured | "Claude Code found." + [Connect HuminLoop] button |
+| Not detected | "VS Code with Claude Code extension not found." + install guidance |
+| Detected, not configured | "VS Code + Claude Code found." + [Connect HuminLoop] button |
 | Configured, no heartbeat | "Configured. Waiting for connection..." (gray dot) |
 | Connected | "Connected" (green dot) + last heartbeat timestamp |
 
 ### Connect Flow
 
 1. User clicks "Connect HuminLoop"
-2. HuminLoop generates the MCP config JSON:
+2. HuminLoop generates the MCP config JSON for `.vscode/mcp.json`:
 
 ```json
 {
-  "mcpServers": {
+  "servers": {
     "huminloop": {
       "command": "node",
       "args": ["{absolute_path_to}/mcp-server/index.js"],
@@ -254,12 +255,12 @@ Visible only when dev features are active (`.ai-workflow/` detected).
 ```
 
 3. Preview panel shows the config with explanation
-4. Two buttons: **"Apply"** (writes to `{repo_path}/.claude/settings.json`) and **"Copy"** (clipboard)
+4. Two buttons: **"Apply"** (writes to `{repo_path}/.vscode/mcp.json`) and **"Copy"** (clipboard)
 5. Apply merges into existing config (doesn't overwrite other MCP servers or settings)
 
 ### Per-Project Wiring
 
-Each HuminLoop project has its own `repo_path`. The MCP config sets `PROJECT_ROOT` per project. When user switches active projects in lite mode, the IDE Connection section reflects that project's config status.
+Each HuminLoop project has its own `repo_path`. The MCP config sets `PROJECT_ROOT` per project. When user switches active projects in Focused mode, the IDE Connection section reflects that project's config status.
 
 ### Heartbeat Integration
 
@@ -283,7 +284,7 @@ Stored in DB settings as `annotation_colors`:
 
 ### Settings UI
 
-New section in Settings (visible in both full and lite modes):
+New section in Settings (visible in both Full and Focused modes):
 - List of color rows: color swatch (clickable → native color picker), label text field, short label text field, delete button
 - "Add Color" button at bottom
 - Reorderable (up/down arrows)
@@ -293,9 +294,9 @@ New section in Settings (visible in both full and lite modes):
 
 | Consumer | How |
 |----------|-----|
-| `ai.js` — `generateLitePrompt()` | The `LITE_PROMPT` template is generated dynamically from the `annotation_colors` setting instead of using hardcoded red/green/pink descriptions |
+| `ai.js` — `generateFocusedPrompt()` | The prompt template is generated dynamically from the `annotation_colors` setting instead of using hardcoded red/green/pink descriptions |
 | Context bundle — Annotation Guide section | Uses custom labels: "{Color} ({hex}) — {label}: [areas marked]" |
-| Lite help page | References configured colors dynamically instead of static descriptions |
+| Focused help page | References configured colors dynamically instead of static descriptions |
 
 ### Backward Compatibility
 
@@ -303,19 +304,90 @@ If `annotation_colors` setting doesn't exist in DB, falls back to the hardcoded 
 
 ---
 
-## 7. Auto-Detection — Dev Features Activation
+## 7. Workflow Scaffolding
+
+HuminLoop ships with bundled workflow templates and can initialize the `.ai-workflow/` directory for any project.
+
+### Bundled Templates
+
+Templates ship inside the app at `workflow-templates/`:
+
+```
+workflow-templates/
+  instructions/
+    SHARED.md       — Project conventions, session protocol, branch model
+    ARCHITECT.md    — Orchestration logic, prefix routing, authorization matrix
+    BUILDER.md      — Code writing rules, commit format, project-specific conventions
+    REVIEWER.md     — Post-commit code review checklist, JSON verdict format
+    SCREENER.md     — Pre-commit hooks and AI analysis rules
+  scripts/
+    prompt-tracker.sh    — Prompt ID generation and status tracking
+    ensure-workflow.sh   — Directory bootstrap and validation
+    show-status.sh       — Status dashboard
+    compose-instructions.sh — Instruction composition utility
+    toggle-relay-mode.sh
+    toggle-audit-watch.sh
+  hooks/
+    prepare-commit-msg   — Auto-updates SESSION.md, appends builder summary
+```
+
+These are generic templates. During scaffolding, HuminLoop substitutes project-specific values (project name, repo path) into the templates where marked with `{{placeholders}}`.
+
+### "Initialize Dev Workflow" Flow
+
+In Focused mode sidebar, when a project has a `repo_path` but no `.ai-workflow/`:
+
+1. Show **"Set up Dev Workflow"** button with brief explanation
+2. User clicks → HuminLoop creates the directory structure:
+
+```
+{repo_path}/
+  .ai-workflow/
+    instructions/   — Copied from templates, project name substituted
+    context/
+      SESSION.md           — Initialized with current branch + timestamp
+      PROMPT_TRACKER.log   — Empty file
+      RELAY_MODE           — "review" (default)
+      AUDIT_WATCH_MODE     — "off" (default)
+      CHANGELOG.md         — Empty with header
+      AUDIT_LOG.md         — Empty with header
+    scripts/         — Copied from templates
+    config/          — Empty (reserved)
+```
+
+3. Installs `prepare-commit-msg` hook to `.git/hooks/` (checks for existing hook, appends if needed)
+4. Dev features activate immediately — sidebar updates to show IDE Connection section
+5. Audit entry logged: "Dev workflow initialized for {project.name}"
+
+### Git Hook Installation
+
+The `prepare-commit-msg` hook is critical for SESSION.md auto-maintenance and prompt lifecycle closing. During scaffolding:
+
+- If no hook exists at `.git/hooks/prepare-commit-msg` → copy template directly
+- If a hook already exists → append HuminLoop's hook logic after existing content (with a comment marker `# --- HuminLoop Dev Workflow ---`)
+- Hook is made executable (`chmod +x`)
+
+### Packaged App Considerations
+
+In packaged builds (`app.isPackaged`), templates are bundled inside `resources/workflow-templates/`. The scaffolding reads from there. In dev mode, reads from `{project_root}/workflow-templates/`.
+
+---
+
+## 8. Auto-Detection — Dev Features Activation
+
+(Unchanged from earlier — now dependent on Section 7 scaffolding for new projects.)
 
 ### Activation Rule
 
-When a project is selected in lite mode and `hasWorkflow(project.repo_path)` returns true (`.ai-workflow/` directory exists), dev features activate. No settings, no toggles, no wizard step.
+When a project is selected in Focused mode and `hasWorkflow(project.repo_path)` returns true (`.ai-workflow/` directory exists), dev features activate. No settings, no toggles, no wizard step.
 
 ### Feature Matrix
 
 | Feature | Without `.ai-workflow/` | With `.ai-workflow/` |
 |---------|------------------------|---------------------|
-| Clip cards | Normal lite cards | + Status badge, Prompt ID, "Bundle & Send" button |
+| Clip cards | Normal Focused cards | + Status badge, Prompt ID, "Bundle & Send" button |
 | Sidebar | Project info only | + IDE Connection section |
-| Header | "Lite Mode" | "Lite Mode — Dev" |
+| Header | "Focused" | "Focused — Dev" |
 | Clip filtering | Show/hide completed | + Workflow status filter (All/Pending/Done) |
 | Context on capture | Screenshot + note + project | + git state, SESSION.md, AUDIT_LOG.md, pending prompts |
 | Prompt tracking | None | Full lifecycle (CAPTURED → BUNDLED → SENT → DONE) |
@@ -332,29 +404,101 @@ If `.ai-workflow/` exists but specific files are missing (no SESSION.md, no PROM
 
 ### No Impact on Full Mode
 
-The existing Workflow tab in full mode continues to work unchanged. Dev features in lite mode are a separate code path reading the same underlying files.
+The existing Workflow tab in full mode continues to work unchanged. Dev features in Focused mode are a separate code path reading the same underlying files.
 
 ---
 
-## 8. Implementation Scope Summary
+## 9. Data Migration (v1.x → v2.0.0)
+
+On first launch after upgrade, main.js runs a one-time migration before any other initialization:
+
+### Migration Steps
+
+1. **Detect:** Check if `app_mode` setting equals `'lite'`. If not found or already `'focused'`, skip migration.
+2. **Settings:**
+   - `app_mode`: `'lite'` → `'focused'`
+   - `lite_active_project` → copy value to `focused_active_project`, delete old key
+3. **Clips:** Update all clips where `source = 'lite'` → `source = 'focused'`
+4. **Mark complete:** Write `migration_v2_done: true` setting to prevent re-running
+
+### Safety
+
+- Migration is idempotent — safe to run multiple times (checks for `migration_v2_done` first)
+- No destructive operations — old setting keys are deleted only after new ones are confirmed written
+- If migration fails mid-way, partial state is fine — next launch retries
+
+---
+
+## 10. Git Hook: Prompt ID Parsing
+
+The `prepare-commit-msg` hook is enhanced to close the prompt lifecycle automatically.
+
+### Parsing Logic
+
+After the existing builder summary logic, the hook scans the commit message for a Prompt ID:
+
+```bash
+# Regex: lines starting with "# Prompt ID: " followed by the ID
+PROMPT_ID=$(grep -oP '(?<=^# Prompt ID: ).+' "$COMMIT_MSG_FILE" | head -1)
+```
+
+Format expected: `scope:HHMM:MMDD:letter` (e.g., `viewer:1430:0409:a`)
+
+### API Call
+
+If a Prompt ID is found, fire-and-forget PATCH to update status:
+
+```bash
+if [ -n "$PROMPT_ID" ]; then
+  # Read port from scaffolding config, fall back to default
+  API_PORT=7277
+  PORT_FILE="$PROJECT_ROOT/.ai-workflow/config/api-port"
+  [ -f "$PORT_FILE" ] && API_PORT=$(cat "$PORT_FILE")
+
+  # Fire-and-forget — don't block the commit if HuminLoop is down
+  curl -s -X PATCH \
+    "http://127.0.0.1:${API_PORT}/api/workflow/prompts/${PROMPT_ID}" \
+    -H "Content-Type: application/json" \
+    -d '{"status":"DONE"}' \
+    --connect-timeout 2 \
+    --max-time 5 \
+    > /dev/null 2>&1 &
+fi
+```
+
+### Behavior
+
+- Commits WITHOUT a Prompt ID → hook does nothing (silent skip)
+- HuminLoop not running → curl times out in background, commit proceeds normally
+- Multiple Prompt IDs in one commit → only the first is processed (one commit = one prompt)
+
+### Port Discovery
+
+During scaffolding (Section 7), HuminLoop writes the current API port to `.ai-workflow/config/api-port`. The hook reads this file. If missing, falls back to `7277`. This handles the rare case where a user changed `HUMINLOOP_API_PORT`.
+
+---
+
+## 11. Implementation Scope Summary
 
 ### New Files
 
 | File | Purpose |
 |------|---------|
-| None | All changes modify existing files. No new source files needed. |
+| `workflow-templates/instructions/*.md` | Bundled instruction templates (SHARED, ARCHITECT, BUILDER, REVIEWER, SCREENER) |
+| `workflow-templates/scripts/*.sh` | Bundled shell scripts (prompt-tracker, ensure-workflow, etc.) |
+| `workflow-templates/hooks/prepare-commit-msg` | Bundled git hook template |
 
 ### Modified Files
 
 | File | Changes |
 |------|---------|
-| `src/workflow-context.js` | Add `getGitState()`, `getPendingPrompts()`, `readRelayMode()`, `assembleBundle()` |
-| `src/main.js` | Add `generatePromptId()`, `bundle-and-send` IPC handler, `bundle-and-send-multiple` IPC handler |
+| `src/workflow-context.js` | Add `getGitState()`, `getPendingPrompts()`, `readRelayMode()`, `assembleBundle()`, `scaffoldWorkflow()` |
+| `src/main.js` | Add `generatePromptId()`, `bundle-and-send` IPC handler, `bundle-and-send-multiple` IPC handler, `init-dev-workflow` IPC handler, v2 migration logic |
 | `src/api-server.js` | Add `PATCH /api/workflow/prompts/:id` endpoint |
-| `src/preload.js` | Add `bundleAndSend()`, `bundleAndSendMultiple()`, `getAnnotationColors()`, `setAnnotationColors()` |
-| `src/ai.js` | Make `LITE_PROMPT` color block dynamic from `annotation_colors` setting |
+| `src/preload.js` | Add `bundleAndSend()`, `bundleAndSendMultiple()`, `getAnnotationColors()`, `setAnnotationColors()`, `initDevWorkflow()` |
+| `src/ai.js` | Rename `generateLitePrompt` → `generateFocusedPrompt`, make prompt color block dynamic from `annotation_colors` setting |
 | `mcp-server/index.js` | Update `get_pending_prompt` to scan `IDE_PROMPT_*.md` (FIFO), call PATCH on consume |
-| `renderer/index.js` | Lite mode: add Bundle & Send button, status badges, IDE connection section, workflow filters, annotation color settings UI, dev mode detection |
+| `renderer/index.js` | Focused mode: rename from Lite, add Bundle & Send button, status badges, IDE connection section, workflow filters, annotation color settings UI, dev mode detection |
 | `.ai-workflow/scripts/prompt-tracker.sh` | Add note about API-based status updates; keep append functionality |
 | `.githooks/prepare-commit-msg` | Add Prompt ID parsing + HTTP PATCH call (fire-and-forget) |
 
@@ -364,5 +508,17 @@ The existing Workflow tab in full mode continues to work unchanged. Dev features
 - Prompt refinement AI (Architect's job)
 - Audit automation / Screener / Reviewer invocation
 - Toolbar color sync with annotation settings
-- IDE support beyond Claude Code
+- IDE support beyond VS Code + Claude Code extension
 - Full mode changes
+
+### Rename: Lite → Focused
+
+The v2.0.0 release renames "Lite Mode" to "Focused Mode" throughout the codebase. This affects:
+- `app_mode` setting: `'lite'` → `'focused'` (with migration for existing users)
+- `source` field on clips: `'lite'` → `'focused'`
+- `lite_active_project` setting → `focused_active_project`
+- All UI labels, CSS classes, IPC handler names, and function names referencing "lite"
+- `renderer/lite-capture.html` → `renderer/focused-capture.html`
+- `generateLitePrompt()` → `generateFocusedPrompt()` in ai.js
+- `autoCategorizeLite()` → `autoCategorizeFocused()` in main.js
+- `getLiteClips()` → `getFocusedClips()` in preload/IPC/DB
