@@ -17,6 +17,99 @@ const { getActiveWindow } = require('./window-info');
 const images = require('./images');
 const workflowContext = require('./workflow-context');
 
+// ── Prompt ID Generation ──
+let batchLetter = 0; // 0=a, 1=b, etc. Resets on restart.
+
+function generatePromptId(scope) {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const MM = String(now.getMonth() + 1).padStart(2, '0');
+  const DD = String(now.getDate()).padStart(2, '0');
+  const letter = String.fromCharCode(97 + batchLetter); // a, b, c...
+  batchLetter++;
+  return `${scope}:${hh}${mm}:${MM}${DD}:${letter}`;
+}
+
+function appendToPromptTracker(repoPath, id, description, type = 'CRAFTED') {
+  const trackerPath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  const timestamp = new Date().toISOString();
+  const line = `${id}|BUNDLED|${timestamp}|${description}|${type}|\n`;
+  fs.appendFileSync(trackerPath, line, 'utf8');
+}
+
+function deriveScope(clip, project) {
+  if (clip.category && clip.category !== 'Uncategorized') {
+    return clip.category.toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 20);
+  }
+  if (project?.name) {
+    return project.name.toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 20);
+  }
+  return 'general';
+}
+
+function formatBundle(promptId, clip, bundle, annotationColors) {
+  let md = `# HuminLoop Dev Prompt\n## Prompt ID: ${promptId}\n\n`;
+  md += `## User Intent\n${bundle.userIntent || '(no note)'}\n\n`;
+  if (bundle.aiInterpretation) {
+    md += `## AI Interpretation\n${bundle.aiInterpretation}\n\n`;
+  }
+  md += `## Screenshot\nAttached separately as ide-prompt-image-${promptId}.png\n\n`;
+
+  md += `## Annotation Guide\n`;
+  if (annotationColors && annotationColors.length) {
+    annotationColors.forEach(c => {
+      md += `- ${c.id} (${c.hex}) — ${c.label}\n`;
+    });
+  } else {
+    md += `- Red (#FF0000) — Delete / Remove / Error\n`;
+    md += `- Green (#00FF00) — Add / Insert\n`;
+    md += `- Pink (#FF69B4) — Identify / Reference / Question\n`;
+  }
+  md += `\n`;
+
+  if (bundle.git) {
+    md += `## Project Context\n`;
+    md += `- Project: ${bundle.project.name}\n`;
+    md += `- Branch: ${bundle.git.branch}\n`;
+    md += `- Last commits:\n`;
+    bundle.git.lastCommits.forEach(c => {
+      md += `  - ${c.hash} ${c.message}\n`;
+    });
+    md += `\n`;
+
+    if (bundle.git.dirtyFiles.length > 0) {
+      md += `## Dirty Files\n`;
+      bundle.git.dirtyFiles.forEach(f => {
+        md += `- ${f.file} (${f.status})\n`;
+      });
+      md += `\n`;
+    }
+  }
+
+  if (bundle.session) {
+    md += `## Session State\n${bundle.session}\n\n`;
+  }
+
+  if (bundle.pendingPrompts.length > 0) {
+    md += `## Pending Work\n`;
+    bundle.pendingPrompts.forEach(p => {
+      md += `- ${p.id}: ${p.description} [${p.status}]\n`;
+    });
+    md += `\n`;
+  }
+
+  if (bundle.auditFindings) {
+    const sections = bundle.auditFindings.split(/^## /m);
+    const lastSection = sections[sections.length - 1];
+    if (lastSection?.trim()) {
+      md += `## Recent Audit Findings\n## ${lastSection.trim()}\n`;
+    }
+  }
+
+  return md;
+}
+
 // ── .env path resolution ──
 // Packaged apps write to userData (writable on all platforms).
 // Dev mode writes next to project root (traditional __dirname/..).
@@ -1054,6 +1147,99 @@ ipcMain.handle('combine-and-send-to-ide', async (_, clipIds, projectId) => {
   notifyMainWindow('clips-changed');
   notifyMainWindow('clip-sent-to-ide', { clipIds, projectName: project.name });
   return { success: true, prompt, path: project.repo_path };
+});
+
+// ── IPC Handlers: Bundle & Send ──
+
+ipcMain.handle('bundle-and-send', async (_, clipId, scopeOverride) => {
+  const clip = await db.getClip(clipId);
+  if (!clip) throw new Error('Clip not found');
+  if (!clip.project_id) throw new Error('Clip not assigned to a project');
+  const project = await db.getProject(clip.project_id);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const scope = scopeOverride || deriveScope(clip, project);
+  const promptId = generatePromptId(scope);
+  const bundle = workflowContext.assembleBundle(project.repo_path, clip, project);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const markdown = formatBundle(promptId, clip, bundle, annotationColors);
+
+  const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+  if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+
+  const safeId = promptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(clipId);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  const desc = (clip.comment || '(screenshot)').slice(0, 80);
+  appendToPromptTracker(project.repo_path, promptId, desc, 'CRAFTED');
+
+  await db.updateClip(clipId, { sent_to_ide_at: new Date().toISOString() });
+
+  addAuditEntry('bundle-send', `Clip ${clipId} bundled as ${promptId} for IDE at ${project.repo_path}`);
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('clip-sent-to-ide', { clipId, promptId, projectName: project.name });
+  return { success: true, promptId, path: project.repo_path };
+});
+
+ipcMain.handle('bundle-and-send-multiple', async (_, clipIds, projectId, scopeOverride) => {
+  if (!Array.isArray(clipIds) || clipIds.length === 0) throw new Error('No clips provided');
+  if (!projectId) throw new Error('project_id required');
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const allClips = await db.getClips();
+  const selected = allClips.filter(c => clipIds.includes(c.id));
+  if (selected.length === 0) throw new Error('No matching clips');
+
+  const scope = scopeOverride || deriveScope(selected[0], project);
+  const promptId = generatePromptId(scope);
+
+  const combinedComment = selected.map(c => c.comment || '(screenshot)').join('\n---\n');
+  const combinedClip = { ...selected[0], comment: combinedComment, aiFixPrompt: null };
+
+  if (ai.isEnabled()) {
+    const notes = selected.map(c => {
+      const raw = images.loadImage(c.id);
+      return { id: c.id, comment: c.comment || '', imageDataURL: raw ? images.compressForAI(raw) : null };
+    });
+    const combinedPrompt = await ai.generateCombinedPrompt(notes);
+    combinedClip.aiFixPrompt = combinedPrompt;
+  }
+
+  const bundle = workflowContext.assembleBundle(project.repo_path, combinedClip, project);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const markdown = formatBundle(promptId, combinedClip, bundle, annotationColors);
+
+  const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+  if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+
+  const safeId = promptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(selected[0].id);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  const desc = `Combined ${selected.length} clips: ${combinedComment.slice(0, 60)}`;
+  appendToPromptTracker(project.repo_path, promptId, desc, 'CRAFTED');
+
+  const sentAt = new Date().toISOString();
+  for (const c of selected) {
+    await db.updateClip(c.id, { sent_to_ide_at: sentAt });
+  }
+
+  addAuditEntry('bundle-send', `${selected.length} clips bundled as ${promptId} for IDE at ${project.repo_path}`);
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('clip-sent-to-ide', { clipIds, promptId, projectName: project.name });
+  return { success: true, promptId, path: project.repo_path };
 });
 
 // ── IPC Handlers: AI Prompt ──

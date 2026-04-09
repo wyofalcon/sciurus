@@ -56,6 +56,8 @@ contextBridge.exposeInMainWorld('quickclip', {
   // Send to IDE
   sendToIde: (clipId) => ipcRenderer.invoke('send-to-ide', clipId),
   combineAndSendToIde: (clipIds, projectId) => ipcRenderer.invoke('combine-and-send-to-ide', clipIds, projectId),
+  bundleAndSend: (clipId, scope) => ipcRenderer.invoke('bundle-and-send', clipId, scope),
+  bundleAndSendMultiple: (clipIds, projectId, scope) => ipcRenderer.invoke('bundle-and-send-multiple', clipIds, projectId, scope),
   onClipSentToIde: (cb) => ipcRenderer.on('clip-sent-to-ide', (_, data) => cb(data)),
 
   // Audit ledger
