@@ -1752,7 +1752,351 @@ git commit -m "style: add CSS for dev workflow badges, IDE connection, annotatio
 
 ---
 
-## Task 15: Version Bump + Final Integration Test
+## Task 15: Queue as Plan — Subagent-Driven Flow
+
+**Files:**
+- Modify: `src/main.js` (new IPC handlers)
+- Modify: `src/preload.js` (expose methods)
+- Modify: `renderer/index.js` (UI for queue, progress, advance/cancel)
+- Modify: `renderer/styles.css` (plan progress styles)
+
+- [ ] **Step 1: Add queue-as-plan IPC handler in main.js**
+
+```javascript
+// ── Plan Queue State ──
+// Active plans: { planId: { projectId, tasks: [{ clipId, promptId, status }], currentIndex: 0 } }
+const activePlans = new Map();
+
+ipcMain.handle('queue-as-plan', async (_, clipIds, projectId) => {
+  if (!Array.isArray(clipIds) || clipIds.length < 2) throw new Error('Need at least 2 clips for a plan');
+  if (!projectId) throw new Error('project_id required');
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const scope = deriveScope(await db.getClip(clipIds[0]), project);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const tasks = [];
+
+  // Generate all prompt IDs upfront (same batch, sequential letters)
+  const firstPromptId = generatePromptId(scope);
+  const planId = firstPromptId; // First task's ID identifies the plan
+
+  for (let i = 0; i < clipIds.length; i++) {
+    const clip = await db.getClip(clipIds[i]);
+    if (!clip) continue;
+
+    const promptId = i === 0 ? firstPromptId : generatePromptId(scope);
+    const parentId = i === 0 ? null : firstPromptId;
+    const status = i === 0 ? 'BUNDLED' : 'QUEUED';
+    const desc = `[Plan ${i + 1}/${clipIds.length}] ${(clip.comment || '(screenshot)').slice(0, 60)}`;
+
+    // Log to tracker
+    appendToPromptTracker(project.repo_path, promptId, desc, 'CRAFTED');
+    // Update status (first task = BUNDLED, rest = QUEUED)
+    if (status === 'QUEUED') {
+      updatePromptStatus(project.repo_path, promptId, 'QUEUED');
+    }
+
+    await db.updateClip(clipIds[i], { prompt_id: promptId });
+    tasks.push({ clipId: clipIds[i], promptId, parentId, status });
+  }
+
+  // Write only the first task's file
+  const firstClip = await db.getClip(clipIds[0]);
+  const bundle = workflowContext.assembleBundle(project.repo_path, firstClip, project);
+  const markdown = formatBundle(firstPromptId, firstClip, bundle, annotationColors);
+
+  const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+  if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+
+  const safeId = firstPromptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(clipIds[0]);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  // Store active plan
+  activePlans.set(planId, { projectId, repoPath: project.repo_path, tasks, currentIndex: 0 });
+
+  addAuditEntry('queue-plan', `Plan ${planId}: ${tasks.length} tasks queued for ${project.name}`);
+  notifyMainWindow('clips-changed');
+  return { success: true, planId, taskCount: tasks.length };
+});
+```
+
+- [ ] **Step 2: Add updatePromptStatus helper in main.js**
+
+```javascript
+function updatePromptStatus(repoPath, promptId, newStatus, files = null) {
+  const trackerPath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  try {
+    const raw = fs.readFileSync(trackerPath, 'utf8');
+    const lines = raw.split('\n');
+    const newLines = lines.map(line => {
+      if (line.startsWith(promptId + '|')) {
+        const parts = line.split('|');
+        parts[1] = newStatus;
+        if (files) {
+          while (parts.length < 7) parts.push('');
+          parts[6] = Array.isArray(files) ? files.join(',') : files;
+        }
+        return parts.join('|');
+      }
+      return line;
+    });
+    fs.writeFileSync(trackerPath, newLines.join('\n'), 'utf8');
+  } catch {}
+}
+```
+
+- [ ] **Step 3: Add advance-plan IPC handler**
+
+```javascript
+ipcMain.handle('advance-plan', async (_, planId) => {
+  const plan = activePlans.get(planId);
+  if (!plan) throw new Error('Plan not found');
+
+  const nextIndex = plan.currentIndex + 1;
+  if (nextIndex >= plan.tasks.length) {
+    activePlans.delete(planId);
+    return { success: true, complete: true };
+  }
+
+  const task = plan.tasks[nextIndex];
+  const clip = await db.getClip(task.clipId);
+  const project = await db.getProject(plan.projectId);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const bundle = workflowContext.assembleBundle(plan.repoPath, clip, project);
+  const markdown = formatBundle(task.promptId, clip, bundle, annotationColors);
+
+  const contextDir = path.join(plan.repoPath, '.ai-workflow', 'context');
+  const safeId = task.promptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(task.clipId);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  // Update tracker
+  updatePromptStatus(plan.repoPath, task.promptId, 'BUNDLED');
+  await db.updateClip(task.clipId, { sent_to_ide_at: new Date().toISOString() });
+  plan.currentIndex = nextIndex;
+
+  addAuditEntry('advance-plan', `Plan ${planId}: advanced to task ${nextIndex + 1}/${plan.tasks.length}`);
+  notifyMainWindow('clips-changed');
+  return { success: true, complete: false, currentTask: nextIndex + 1, totalTasks: plan.tasks.length };
+});
+```
+
+- [ ] **Step 4: Add cancel-plan IPC handler**
+
+```javascript
+ipcMain.handle('cancel-plan', async (_, planId) => {
+  const plan = activePlans.get(planId);
+  if (!plan) throw new Error('Plan not found');
+
+  // Mark remaining QUEUED tasks as FAILED
+  for (let i = plan.currentIndex + 1; i < plan.tasks.length; i++) {
+    updatePromptStatus(plan.repoPath, plan.tasks[i].promptId, 'FAILED');
+  }
+
+  activePlans.delete(planId);
+  addAuditEntry('cancel-plan', `Plan ${planId}: cancelled with ${plan.tasks.length - plan.currentIndex - 1} remaining tasks`);
+  notifyMainWindow('clips-changed');
+  return { success: true };
+});
+
+// Expose active plans for renderer
+ipcMain.handle('get-active-plans', async () => {
+  const plans = [];
+  for (const [planId, plan] of activePlans) {
+    plans.push({
+      planId,
+      projectId: plan.projectId,
+      tasks: plan.tasks.map(t => ({ clipId: t.clipId, promptId: t.promptId, status: t.status })),
+      currentIndex: plan.currentIndex,
+      totalTasks: plan.tasks.length,
+    });
+  }
+  return plans;
+});
+```
+
+- [ ] **Step 5: Add preload methods**
+
+```javascript
+queueAsPlan: (clipIds, projectId) => ipcRenderer.invoke('queue-as-plan', clipIds, projectId),
+advancePlan: (planId) => ipcRenderer.invoke('advance-plan', planId),
+cancelPlan: (planId) => ipcRenderer.invoke('cancel-plan', planId),
+getActivePlans: () => ipcRenderer.invoke('get-active-plans'),
+```
+
+- [ ] **Step 6: Add auto-advance to polling in renderer/index.js**
+
+Update the `startDevPolling` interval to check for plan advancement:
+
+```javascript
+devPollInterval = setInterval(async () => {
+  if (!isDevMode || !isFocusedMode) return;
+
+  const oldPrompts = JSON.stringify(devPrompts);
+  devPrompts = await window.quickclip.getWorkflowPrompts();
+
+  // Auto-advance plans if relay mode is auto
+  const plans = await window.quickclip.getActivePlans();
+  for (const plan of plans) {
+    const currentTask = plan.tasks[plan.currentIndex];
+    const prompt = devPrompts.find(p => p.id === currentTask?.promptId);
+    if (prompt?.status === 'DONE') {
+      const relayMode = await window.quickclip.getSetting('relay_mode_override');
+      // Check relay mode from workflow status
+      const wfStatus = await window.quickclip.getWorkflowStatus();
+      if (wfStatus.relayMode === 'auto') {
+        await window.quickclip.advancePlan(plan.planId);
+      }
+    }
+  }
+
+  if (JSON.stringify(devPrompts) !== oldPrompts) {
+    renderAll();
+  }
+}, 12000);
+```
+
+- [ ] **Step 7: Add "Queue as Plan" button to multi-select actions in renderer**
+
+Next to the existing "Bundle & Send" multi-select button:
+
+```javascript
+if (isDevMode && selectMode && selectedClipIds.size >= 2) {
+  html += `<button class="queue-plan-btn" onclick="queueAsPlan()">&#x1F4CB; Queue as Plan (${selectedClipIds.size} tasks)</button>`;
+}
+```
+
+```javascript
+async function queueAsPlan() {
+  if (selectedClipIds.size < 2) return;
+  try {
+    const result = await window.quickclip.queueAsPlan([...selectedClipIds], selectedProjectId);
+    if (result.success) {
+      selectMode = false;
+      selectedClipIds.clear();
+      await loadData();
+      renderAll();
+    }
+  } catch (e) {
+    alert('Queue as Plan failed: ' + e.message);
+  }
+}
+```
+
+- [ ] **Step 8: Add plan progress UI to sidebar**
+
+In `renderIdeConnectionSection`, after the pending count:
+
+```javascript
+// Plan progress
+const plans = window._activePlans || [];
+if (plans.length > 0) {
+  plans.forEach(plan => {
+    const done = plan.tasks.filter(t => {
+      const p = devPrompts.find(dp => dp.id === t.promptId);
+      return p?.status === 'DONE';
+    }).length;
+    html += `<div class="plan-progress">`;
+    html += `<div class="plan-label">Plan: ${done}/${plan.totalTasks} tasks</div>`;
+    html += `<div class="plan-bar"><div class="plan-bar-fill" style="width:${(done/plan.totalTasks)*100}%"></div></div>`;
+
+    // Manual advance button (review mode)
+    const currentTask = plan.tasks[plan.currentIndex];
+    const currentPrompt = devPrompts.find(p => p.id === currentTask?.promptId);
+    if (currentPrompt?.status === 'DONE' && plan.currentIndex < plan.totalTasks - 1) {
+      html += `<button class="btn-primary btn-sm" onclick="advancePlan('${escAttr(plan.planId)}')">Send next task</button>`;
+    }
+
+    html += `<button class="btn-danger btn-sm" onclick="cancelPlan('${escAttr(plan.planId)}')">Cancel plan</button>`;
+    html += `</div>`;
+  });
+}
+```
+
+Fetch active plans in loadData and store for rendering:
+```javascript
+if (isDevMode) {
+  window._activePlans = await window.quickclip.getActivePlans();
+}
+```
+
+- [ ] **Step 9: Add plan progress styles to CSS**
+
+```css
+/* Plan progress */
+.plan-progress { padding: 6px 0; border-top: 1px solid var(--border); }
+.plan-label { font-size: 0.85em; margin-bottom: 4px; }
+.plan-bar { background: var(--bg-main); border-radius: 4px; height: 6px; overflow: hidden; }
+.plan-bar-fill { background: #10b981; height: 100%; transition: width 0.3s; }
+.btn-sm { font-size: 0.75em; padding: 2px 8px; margin-top: 4px; margin-right: 4px; }
+.btn-danger { background: #ef4444; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+.btn-danger:hover { background: #dc2626; }
+.queue-plan-btn {
+  background: #6d28d9; color: #fff; border: none; border-radius: 4px;
+  padding: 4px 10px; cursor: pointer; font-size: 0.85em;
+}
+.queue-plan-btn:hover { background: #5b21b6; }
+```
+
+- [ ] **Step 10: Add QUEUED badge to clip card rendering**
+
+In Task 10's badge class map, add:
+```javascript
+'QUEUED': 'badge-queued',
+```
+
+In CSS:
+```css
+.badge-queued { background: #8b5cf6; color: #fff; }
+```
+
+- [ ] **Step 11: Add advancePlan and cancelPlan JS handlers**
+
+```javascript
+async function advancePlan(planId) {
+  try {
+    await window.quickclip.advancePlan(planId);
+    await loadData();
+    renderAll();
+  } catch (e) {
+    alert('Advance plan failed: ' + e.message);
+  }
+}
+
+async function cancelPlan(planId) {
+  if (!confirm('Cancel remaining tasks in this plan?')) return;
+  try {
+    await window.quickclip.cancelPlan(planId);
+    await loadData();
+    renderAll();
+  } catch (e) {
+    alert('Cancel plan failed: ' + e.message);
+  }
+}
+```
+
+- [ ] **Step 12: Commit**
+
+```bash
+git add src/main.js src/preload.js renderer/index.js renderer/styles.css
+git commit -m "feat: add Queue as Plan — subagent-driven sequential task dispatch"
+```
+
+---
+
+## Task 16: Version Bump + Final Integration Test
 
 **Files:**
 - Modify: `package.json`
@@ -1784,6 +2128,11 @@ Run `npm start` and verify:
 14. Click it → verify `.ai-workflow/` created with all expected files
 15. Verify IDE connection detection (if VS Code + Claude Code installed)
 16. If configured, verify "Connect HuminLoop" → preview → Apply writes `.vscode/mcp.json`
+17. Multi-select 3+ clips → verify "Queue as Plan" button appears
+18. Click "Queue as Plan" → verify first task dispatched, others show QUEUED
+19. Simulate task 1 DONE (manually edit PROMPT_TRACKER) → verify auto-advance sends task 2 (relay=auto)
+20. Test cancel plan → verify remaining tasks marked FAILED
+21. Test with relay=review → verify "Send next task" button appears instead of auto-advance
 
 - [ ] **Step 3: Commit**
 

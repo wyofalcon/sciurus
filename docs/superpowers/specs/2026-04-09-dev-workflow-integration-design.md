@@ -143,6 +143,46 @@ This layers on top of the existing show/hide completed toggle.
 
 Select multiple clips → "Bundle & Send" combines their context into one payload with one Prompt ID. Reuses the existing `combineAndSendToIde` pattern but with the enriched context bundle format.
 
+### Queue as Plan (Subagent-Driven Flow)
+
+Select multiple clips in order → **"Queue as Plan"** creates N sequential prompts instead of one combined prompt. Each clip becomes an independent task dispatched one at a time.
+
+**How it works:**
+
+1. User multi-selects clips in desired execution order
+2. Clicks **"Queue as Plan"**
+3. HuminLoop creates N prompt tracker entries, all sharing a `PARENT_ID` (the first task's Prompt ID) and sequential batch letters (`a`, `b`, `c`...)
+4. Writes ONLY the first task's `IDE_PROMPT_*.md` file to the project workspace
+5. Architect picks up task `a` via MCP `get_pending_prompt`, Builder executes, commits with Prompt ID → status DONE
+6. **Auto-advance (RELAY_MODE = auto):** HuminLoop detects DONE on task `a` via polling/hook → automatically writes task `b`'s `IDE_PROMPT_*.md`. Architect picks up on next `get_pending_prompt` call.
+7. **Manual advance (RELAY_MODE = review):** HuminLoop shows "Task 1 complete — Send next?" button. User reviews the result and clicks to advance.
+8. Repeat until all tasks complete
+
+**Why this is subagent-driven:**
+- Each task gets its own prompt file — the Architect receives a **fresh** prompt with no context bleed from previous tasks
+- Review gate between tasks (when relay = review) prevents cascading errors
+- The Architect can `/clear` between tasks for a clean context window
+- Each task's affected files are tracked independently in PROMPT_TRACKER
+
+**Queue progress UI:**
+- Sidebar shows: "Plan: 2/5 tasks" with a mini progress bar
+- Each queued clip card shows its position: "Task 1 of 5 — DONE", "Task 2 of 5 — SENT", "Task 3 of 5 — QUEUED"
+- New status: **QUEUED** — task is in the plan but not yet dispatched (file not yet written)
+
+**Status transitions for queued tasks:**
+
+```
+QUEUED    — Task is in the plan, waiting for previous task to complete
+    ↓ previous task hits DONE (auto) or user clicks "Send next" (review)
+BUNDLED   — IDE_PROMPT_{id}.md written for this task
+    ↓ Architect calls get_pending_prompt
+SENT      — MCP consumed the file
+    ↓ Builder commits with Prompt ID
+DONE      — Hook updates status, triggers next task advancement
+```
+
+**Plan cancellation:** User can cancel remaining queued tasks at any time. Cancellation sets remaining QUEUED tasks to FAILED status and stops auto-advancement.
+
 ### Status Transitions
 
 ```
@@ -159,6 +199,8 @@ DONE      — Git hook parses Prompt ID, calls PATCH /api/workflow/prompts/:id {
 
 Renderer polls workflow state every 10-15 seconds when the clip list is visible in a dev-enabled project. Also refreshes on window focus. No websocket needed.
 
+**Auto-advance check:** During each poll cycle, if a plan is active and the current task is DONE, the polling logic calls `advance-plan` to dispatch the next QUEUED task (only when RELAY_MODE = auto). In review mode, the poll detects DONE and shows the "Send next?" button instead.
+
 ---
 
 ## 4. Prompt Lifecycle & Tracking
@@ -172,6 +214,12 @@ Renderer polls workflow state every 10-15 seconds when the clip list is visible 
 | `api-server.js` — `PATCH /api/workflow/prompts/:id` | Updates prompt status in PROMPT_TRACKER.log. Called by MCP server and git hooks |
 | `mcp-server/index.js` — `get_pending_prompt` update | Scans for `IDE_PROMPT_*.md` files (FIFO), returns oldest. After consuming, calls PATCH endpoint to update status to SENT |
 | `preload.js` — `bundleAndSend(clipId, scope?)` | Exposed to renderer, calls `bundle-and-send` IPC |
+| `main.js` — `queue-as-plan` IPC handler | Creates N linked prompt entries (QUEUED status), writes only the first task's file, stores plan state |
+| `main.js` — `advance-plan` IPC handler | Writes next QUEUED task's file when previous hits DONE. Called by polling or user click |
+| `main.js` — `cancel-plan` IPC handler | Sets remaining QUEUED tasks to FAILED, stops auto-advancement |
+| `preload.js` — `queueAsPlan(clipIds, projectId)` | Exposed to renderer |
+| `preload.js` — `advancePlan(planId)` | Exposed to renderer (for manual advance in review mode) |
+| `preload.js` — `cancelPlan(planId)` | Exposed to renderer |
 | `preload.js` — `bundleAndSendMultiple(clipIds, scope?)` | Multi-clip variant |
 | `prepare-commit-msg` hook enhancement | Parses Prompt ID from commit message, calls `PATCH /api/workflow/prompts/:id` with status DONE via HTTP API. Fire-and-forget (does not block commit if API is unavailable) |
 
@@ -196,7 +244,7 @@ ID|STATUS|TIMESTAMP|DESCRIPTION|TYPE|PARENT_ID|FILES
 ```
 
 - **ID:** `scope:HHMM:MMDD:letter`
-- **STATUS:** CRAFTED → BUNDLED → SENT → DONE (or FAILED)
+- **STATUS:** QUEUED → CRAFTED → BUNDLED → SENT → DONE (or FAILED)
 - **TIMESTAMP:** ISO 8601
 - **DESCRIPTION:** Brief text from user's note
 - **TYPE:** CRAFTED (from HuminLoop) or DIRECT (from shell script)
