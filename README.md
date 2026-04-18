@@ -315,6 +315,17 @@ Copy `.env.example` to `.env` and customize:
 
 ## Architecture
 
+## Steerability & Prompt Architecture
+
+To ensure the AI generates actionable, safe, and contextually accurate outputs, HuminLoop utilizes a structured system prompt framework. The AI (Gemini 2.5 Flash) is tightly constrained to act strictly as a localized code-assistant. During the background enrichment process, the model is forced to extract URL context and required to output structured JSON rather than raw text. This deterministic constraint minimizes parsing errors in the IPC layer and ensures the prompt generation remains highly steerable and predictable.
+
+## Limitations & Interpretability (Current Failure Modes)
+
+As a rapid prototype exploring agentic context-switching, the system currently has known edge cases:
+* **Visual Context Extraction:** The model occasionally misinterprets highly customized, low-contrast IDE themes or deeply nested, unstructured terminal outputs. 
+* **Hallucination Mitigation:** Currently, the human remains strictly "in the loop" to verify the generated prompt before execution. 
+* **Future Roadmap:** Upcoming iterations will introduce a confidence-score threshold before auto-generating a prompt, and a migration path toward localized, containerized models to fully eliminate external API dependency for sensitive codebase context.
+
 ```
 Renderer (5 windows + 2 overlays)    Main Process
   index.html — tabbed notes viewer      Tray + global hotkey
