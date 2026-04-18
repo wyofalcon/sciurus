@@ -87,6 +87,8 @@ async function runMigrations() {
     `ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_in_ide BOOLEAN NOT NULL DEFAULT FALSE`,
     `ALTER TABLE projects ADD COLUMN IF NOT EXISTS ide VARCHAR(50) DEFAULT NULL`,
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS sent_to_ide_at TIMESTAMPTZ DEFAULT NULL`,
+    `ALTER TABLE clips DROP CONSTRAINT IF EXISTS clips_source_check`,
+    `ALTER TABLE clips ADD CONSTRAINT clips_source_check CHECK (source IN ('full', 'focused'))`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }

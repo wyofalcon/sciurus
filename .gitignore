@@ -4,6 +4,7 @@ token.json
 node_modules/
 dist/
 dist2/
+build/*.exe
 .superpowers/
 out/
 Notes/
@@ -19,3 +20,5 @@ screenshots/
 .ai-workflow/context/.dashboard.pid
 .ai-workflow/context/.audit-last-*
 .ai-workflow/context/WORKFLOW_CHANGE_PENDING
+.claude-session-state.json
+.claude-project-journal.md
