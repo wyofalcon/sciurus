@@ -87,6 +87,8 @@ async function runMigrations() {
     `ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_in_ide BOOLEAN NOT NULL DEFAULT FALSE`,
     `ALTER TABLE projects ADD COLUMN IF NOT EXISTS ide VARCHAR(50) DEFAULT NULL`,
     `ALTER TABLE clips ADD COLUMN IF NOT EXISTS sent_to_ide_at TIMESTAMPTZ DEFAULT NULL`,
+    `ALTER TABLE clips DROP CONSTRAINT IF EXISTS clips_source_check`,
+    `ALTER TABLE clips ADD CONSTRAINT clips_source_check CHECK (source IN ('full', 'focused'))`,
   ];
   for (const sql of migrations) {
     try { await pool.query(sql); } catch (e) { /* already exists */ }
@@ -215,7 +217,7 @@ async function getClip(id) {
 
 async function saveClip(clip) {
   const categoryId = await getCategoryId(clip.category || 'Uncategorized');
-  const VALID_SOURCES = ['full', 'lite'];
+  const VALID_SOURCES = ['full', 'lite', 'focused'];
   const source = VALID_SOURCES.includes(clip.source) ? clip.source : 'full';
   await pool.query(
     `INSERT INTO clips (id, image, comment, category_id, project_id, tags, ai_summary, url, status, timestamp, source, window_title, process_name)
@@ -557,6 +559,10 @@ async function migrateFromStore(storeData) {
 // Helpers
 // ---------------------------------------------------------------------------
 
+async function runRaw(sql, params = []) {
+  return pool.query(sql, params);
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -565,6 +571,7 @@ module.exports = {
   init,
   close,
   isReady,
+  runRaw,
   // Clips
   getClips,
   getClip,

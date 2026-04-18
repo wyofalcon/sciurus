@@ -17,6 +17,121 @@ const { getActiveWindow } = require('./window-info');
 const images = require('./images');
 const workflowContext = require('./workflow-context');
 
+// ── Prompt ID Generation ──
+let batchLetter = 0; // 0=a, 1=b, etc. Resets on restart.
+const activePlans = new Map(); // planId → { projectId, repoPath, tasks, currentIndex }
+
+function generatePromptId(scope) {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const MM = String(now.getMonth() + 1).padStart(2, '0');
+  const DD = String(now.getDate()).padStart(2, '0');
+  const letter = String.fromCharCode(97 + batchLetter); // a, b, c...
+  batchLetter++;
+  return `${scope}:${hh}${mm}:${MM}${DD}:${letter}`;
+}
+
+function appendToPromptTracker(repoPath, id, description, type = 'CRAFTED') {
+  const trackerPath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  const timestamp = new Date().toISOString();
+  const line = `${id}|BUNDLED|${timestamp}|${description}|${type}|\n`;
+  fs.appendFileSync(trackerPath, line, 'utf8');
+}
+
+function deriveScope(clip, project) {
+  if (clip.category && clip.category !== 'Uncategorized') {
+    return clip.category.toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 20);
+  }
+  if (project?.name) {
+    return project.name.toLowerCase().replace(/[^a-z0-9]/g, '-').substring(0, 20);
+  }
+  return 'general';
+}
+
+function updatePromptStatus(repoPath, promptId, newStatus, files = null) {
+  const trackerPath = path.join(repoPath, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+  try {
+    const raw = fs.readFileSync(trackerPath, 'utf8');
+    const lines = raw.split('\n');
+    const newLines = lines.map(line => {
+      if (line.startsWith(promptId + '|')) {
+        const parts = line.split('|');
+        parts[1] = newStatus;
+        if (files) {
+          while (parts.length < 7) parts.push('');
+          parts[6] = Array.isArray(files) ? files.join(',') : files;
+        }
+        return parts.join('|');
+      }
+      return line;
+    });
+    fs.writeFileSync(trackerPath, newLines.join('\n'), 'utf8');
+  } catch {}
+}
+
+function formatBundle(promptId, clip, bundle, annotationColors) {
+  let md = `# HuminLoop Dev Prompt\n## Prompt ID: ${promptId}\n\n`;
+  md += `## User Intent\n${bundle.userIntent || '(no note)'}\n\n`;
+  if (bundle.aiInterpretation) {
+    md += `## AI Interpretation\n${bundle.aiInterpretation}\n\n`;
+  }
+  md += `## Screenshot\nAttached separately as ide-prompt-image-${promptId}.png\n\n`;
+
+  md += `## Annotation Guide\n`;
+  if (annotationColors && annotationColors.length) {
+    annotationColors.forEach(c => {
+      md += `- ${c.id} (${c.hex}) — ${c.label}\n`;
+    });
+  } else {
+    md += `- Red (#FF0000) — Delete / Remove / Error\n`;
+    md += `- Green (#00FF00) — Add / Insert\n`;
+    md += `- Pink (#FF69B4) — Identify / Reference / Question\n`;
+  }
+  md += `\n`;
+
+  if (bundle.git) {
+    md += `## Project Context\n`;
+    md += `- Project: ${bundle.project.name}\n`;
+    md += `- Branch: ${bundle.git.branch}\n`;
+    md += `- Last commits:\n`;
+    bundle.git.lastCommits.forEach(c => {
+      md += `  - ${c.hash} ${c.message}\n`;
+    });
+    md += `\n`;
+
+    if (bundle.git.dirtyFiles.length > 0) {
+      md += `## Dirty Files\n`;
+      bundle.git.dirtyFiles.forEach(f => {
+        md += `- ${f.file} (${f.status})\n`;
+      });
+      md += `\n`;
+    }
+  }
+
+  if (bundle.session) {
+    md += `## Session State\n${bundle.session}\n\n`;
+  }
+
+  if (bundle.pendingPrompts.length > 0) {
+    md += `## Pending Work\n`;
+    bundle.pendingPrompts.forEach(p => {
+      md += `- ${p.id}: ${p.description} [${p.status}]\n`;
+    });
+    md += `\n`;
+  }
+
+  if (bundle.auditFindings) {
+    const sections = bundle.auditFindings.split(/^## /m);
+    const lastSection = sections[sections.length - 1];
+    if (lastSection?.trim()) {
+      md += `## Recent Audit Findings\n## ${lastSection.trim()}\n`;
+    }
+  }
+
+  return md;
+}
+
 // ── .env path resolution ──
 // Packaged apps write to userData (writable on all platforms).
 // Dev mode writes next to project root (traditional __dirname/..).
@@ -124,6 +239,42 @@ async function getAppMode() {
   return mode || 'full';
 }
 
+// ── v2 Migration: Lite → Focused ──
+
+async function migrateV2() {
+  const done = await db.getSettings('migration_v2_done');
+  if (done) return;
+
+  console.log('[HuminLoop] Running v1 → v2 migration...');
+
+  // Migrate app_mode setting
+  const mode = await db.getSettings('app_mode');
+  if (mode === 'lite') {
+    await db.saveSetting('app_mode', 'focused');
+  }
+
+  // Migrate lite_active_project → focused_active_project
+  const liteProject = await db.getSettings('lite_active_project');
+  if (liteProject) {
+    await db.saveSetting('focused_active_project', liteProject);
+    await db.saveSetting('lite_active_project', null);
+  }
+
+  // Migrate clip source field
+  await db.runRaw(`UPDATE clips SET source = 'focused' WHERE source = 'lite'`);
+
+  // Migrate autoCopyLitePrompt inside AI settings blob
+  const aiSettings = await db.getSettings('ai');
+  if (aiSettings && aiSettings.autoCopyLitePrompt !== undefined) {
+    aiSettings.autoCopyFocusedPrompt = aiSettings.autoCopyLitePrompt;
+    delete aiSettings.autoCopyLitePrompt;
+    await db.saveSetting('ai', aiSettings);
+  }
+
+  await db.saveSetting('migration_v2_done', true);
+  console.log('[HuminLoop] v2 migration complete');
+}
+
 // ── First-Run Detection ──
 
 function isFirstRun() {
@@ -157,8 +308,8 @@ function createSetupWindow() {
 
 async function createMainWindow() {
   const mode = await getAppMode();
-  const htmlFile = 'index.html';  // Both modes use same renderer; lite mode hides tabs via JS
-  const windowSize = mode === 'lite' ? { width: 900, height: 700 } : { width: 1100, height: 750 };
+  const htmlFile = 'index.html';  // Both modes use same renderer; focused mode hides tabs via JS
+  const windowSize = mode === 'focused' ? { width: 900, height: 700 } : { width: 1100, height: 750 };
   mainWindow = new BrowserWindow({
     width: windowSize.width, height: windowSize.height, show: false,
     title: 'HuminLoop',
@@ -188,8 +339,8 @@ async function createCaptureWindow(imageDataURL, windowMeta = null) {
     return;
   }
   const mode = await getAppMode();
-  const htmlFile = mode === 'lite' ? 'lite-capture.html' : 'capture.html';
-  const captureSize = mode === 'lite' ? { width: 340, height: 420 } : { width: 460, height: 580 };
+  const htmlFile = mode === 'focused' ? 'focused-capture.html' : 'capture.html';
+  const captureSize = mode === 'focused' ? { width: 340, height: 420 } : { width: 460, height: 580 };
   const { width: screenW } = screen.getPrimaryDisplay().workAreaSize;
   captureWindow = new BrowserWindow({
     width: captureSize.width, height: captureSize.height,
@@ -476,7 +627,7 @@ function startClipboardWatcher() {
 async function rebuildTrayMenu() {
   if (!tray) return;
   const mode = await getAppMode();
-  const modeLabel = mode === 'lite' ? 'Switch to Full Mode' : 'Switch to Lite Mode';
+  const modeLabel = mode === 'focused' ? 'Switch to Full Mode' : 'Switch to Focused Mode';
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open HuminLoop', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
     { label: 'Quick Capture', click: async () => await createCaptureWindow(null) },
@@ -484,7 +635,7 @@ async function rebuildTrayMenu() {
     { type: 'separator' },
     { label: modeLabel, click: async () => {
       const current = await getAppMode();
-      const next = current === 'lite' ? 'full' : 'lite';
+      const next = current === 'focused' ? 'full' : 'focused';
       await db.saveSetting('app_mode', next);
       if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
       if (captureWindow && !captureWindow.isDestroyed()) { captureWindow.destroy(); captureWindow = null; }
@@ -568,9 +719,9 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
     if (result.summary) updates.aiSummary = result.summary;
     if (result.url) updates.url = result.url;
 
-    // AI-suggested project assignment (only if clip isn't already assigned and not in lite mode)
+    // AI-suggested project assignment (only if clip isn't already assigned and not in focused mode)
     const currentMode = await getAppMode();
-    if (result.project_id && (!clip || !clip.project_id) && currentMode !== 'lite') {
+    if (result.project_id && (!clip || !clip.project_id) && currentMode !== 'focused') {
       // Verify the project actually exists
       const proj = await db.getProject(result.project_id);
       if (proj) {
@@ -597,36 +748,38 @@ async function autoCategorize(clipId, comment, imageData, windowTitle = null, pr
   }
 }
 
-/** Run AI lite prompt generation in the background after a clip is saved in Lite mode. */
-async function autoCategorizeLite(clipId, comment, imageData, windowTitle, processName) {
+/** Run AI focused prompt generation in the background after a clip is saved in Focused mode. */
+async function autoCategorizeFocused(clipId, comment, imageData, windowTitle, processName) {
   try {
-    const projectId = await db.getSettings('lite_active_project');
+    const projectId = await db.getSettings('focused_active_project');
     const project = projectId ? await db.getProject(projectId) : {};
     const session = project.repo_path ? workflowContext.readSessionContext(project.repo_path) : null;
     const audit = project.repo_path ? workflowContext.readAuditFindings(project.repo_path) : null;
     const compressedImage = imageData ? images.compressForAI(imageData) : null;
-    const prompt = await ai.generateLitePrompt(
+    const annotationColors = await db.getSettings('annotation_colors');
+    const prompt = await ai.generateFocusedPrompt(
       comment, compressedImage,
       { windowTitle, processName },
       { name: project.name, description: project.description, repo_path: project.repo_path },
-      { session, audit }
+      { session, audit },
+      annotationColors
     );
     if (prompt) {
       await db.updateClip(clipId, { aiFixPrompt: prompt });
       notifyMainWindow('clips-changed');
-      console.log(`[HuminLoop] Lite prompt generated for clip ${clipId}`);
-      addAuditEntry('ai', `Lite prompt generated for clip ${clipId}`);
+      console.log(`[HuminLoop] Focused prompt generated for clip ${clipId}`);
+      addAuditEntry('ai', `Focused prompt generated for clip ${clipId}`);
 
       // Auto-copy to clipboard if enabled
       const aiSettings = await db.getSettings('ai');
-      if (aiSettings && aiSettings.autoCopyLitePrompt) {
+      if (aiSettings && aiSettings.autoCopyFocusedPrompt) {
         clipboard.writeText(prompt);
         notifyMainWindow('prompt-auto-copied');
-        console.log(`[HuminLoop] Lite prompt auto-copied to clipboard`);
+        console.log(`[HuminLoop] Focused prompt auto-copied to clipboard`);
       }
     }
   } catch (e) {
-    console.error('[HuminLoop] Lite prompt generation failed:', e.message);
+    console.error('[HuminLoop] Focused prompt generation failed:', e.message);
   }
 }
 
@@ -635,9 +788,9 @@ async function autoCategorizeLite(clipId, comment, imageData, windowTitle, proce
 ipcMain.handle('get-clips', () => db.getClips());
 ipcMain.handle('get-general-clips', () => db.getClips(null));
 ipcMain.handle('get-clips-for-project', (_, projectId) => db.getClips(projectId));
-ipcMain.handle('get-lite-clips', async () => {
-  const projectId = await db.getSettings('lite_active_project');
-  return db.getClips(projectId || undefined, 'lite');
+ipcMain.handle('get-focused-clips', async () => {
+  const projectId = await db.getSettings('focused_active_project');
+  return db.getClips(projectId || undefined, 'focused');
 });
 
 ipcMain.handle('save-clip', async (_, clip) => {
@@ -650,13 +803,13 @@ ipcMain.handle('save-clip', async (_, clip) => {
     clip.image = '__on_disk__';
   }
 
-  // Lite mode: inject source and active project
+  // Focused mode: inject source and active project
   const mode = await getAppMode();
-  if (mode === 'lite') {
-    clip.source = 'lite';
-    const liteProject = await db.getSettings('lite_active_project');
-    if (liteProject && !clip.project_id) {
-      clip.project_id = liteProject;
+  if (mode === 'focused') {
+    clip.source = 'focused';
+    const focusedProject = await db.getSettings('focused_active_project');
+    if (focusedProject && !clip.project_id) {
+      clip.project_id = focusedProject;
     }
   }
 
@@ -684,10 +837,10 @@ ipcMain.handle('save-clip', async (_, clip) => {
     // Always run standard categorization (summary, tags, category)
     autoCategorize(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
       .catch(e => console.error('[HuminLoop] Auto-categorize background error:', e.message));
-    // In lite mode, also generate the focused fix prompt
-    if (mode === 'lite') {
-      autoCategorizeLite(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
-        .catch(e => console.error('[HuminLoop] Lite prompt background error:', e.message));
+    // In focused mode, also generate the focused fix prompt
+    if (mode === 'focused') {
+      autoCategorizeFocused(clip.id, clip.comment || '', imageData, clip.window_title, clip.process_name)
+        .catch(e => console.error('[HuminLoop] Focused prompt background error:', e.message));
     }
   } else if (!ai.isEnabled()) {
     console.log('[HuminLoop] AI disabled — skipping categorization');
@@ -882,6 +1035,16 @@ ipcMain.handle('save-setting', async (_, key, value) => {
   return true;
 });
 
+ipcMain.handle('get-annotation-colors', async () => {
+  const colors = await db.getSettings('annotation_colors');
+  return colors || null;
+});
+
+ipcMain.handle('save-annotation-colors', async (_, colors) => {
+  await db.saveSetting('annotation_colors', colors);
+  return true;
+});
+
 // ── IPC Handlers: AI ──
 
 ipcMain.handle('ai-categorize', async (_, comment, imageData) => {
@@ -1020,6 +1183,220 @@ ipcMain.handle('combine-and-send-to-ide', async (_, clipIds, projectId) => {
   return { success: true, prompt, path: project.repo_path };
 });
 
+// ── IPC Handlers: Bundle & Send ──
+
+ipcMain.handle('bundle-and-send', async (_, clipId, scopeOverride) => {
+  const clip = await db.getClip(clipId);
+  if (!clip) throw new Error('Clip not found');
+  if (!clip.project_id) throw new Error('Clip not assigned to a project');
+  const project = await db.getProject(clip.project_id);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const scope = scopeOverride || deriveScope(clip, project);
+  const promptId = generatePromptId(scope);
+  const bundle = workflowContext.assembleBundle(project.repo_path, clip, project);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const markdown = formatBundle(promptId, clip, bundle, annotationColors);
+
+  const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+  if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+
+  const safeId = promptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(clipId);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  const desc = (clip.comment || '(screenshot)').slice(0, 80);
+  appendToPromptTracker(project.repo_path, promptId, desc, 'CRAFTED');
+
+  await db.updateClip(clipId, { sent_to_ide_at: new Date().toISOString() });
+
+  addAuditEntry('bundle-send', `Clip ${clipId} bundled as ${promptId} for IDE at ${project.repo_path}`);
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('clip-sent-to-ide', { clipId, promptId, projectName: project.name });
+  return { success: true, promptId, path: project.repo_path };
+});
+
+ipcMain.handle('bundle-and-send-multiple', async (_, clipIds, projectId, scopeOverride) => {
+  if (!Array.isArray(clipIds) || clipIds.length === 0) throw new Error('No clips provided');
+  if (!projectId) throw new Error('project_id required');
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const allClips = await db.getClips();
+  const selected = allClips.filter(c => clipIds.includes(c.id));
+  if (selected.length === 0) throw new Error('No matching clips');
+
+  const scope = scopeOverride || deriveScope(selected[0], project);
+  const promptId = generatePromptId(scope);
+
+  const combinedComment = selected.map(c => c.comment || '(screenshot)').join('\n---\n');
+  const combinedClip = { ...selected[0], comment: combinedComment, aiFixPrompt: null };
+
+  if (ai.isEnabled()) {
+    const notes = selected.map(c => {
+      const raw = images.loadImage(c.id);
+      return { id: c.id, comment: c.comment || '', imageDataURL: raw ? images.compressForAI(raw) : null };
+    });
+    const combinedPrompt = await ai.generateCombinedPrompt(notes);
+    combinedClip.aiFixPrompt = combinedPrompt;
+  }
+
+  const bundle = workflowContext.assembleBundle(project.repo_path, combinedClip, project);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const markdown = formatBundle(promptId, combinedClip, bundle, annotationColors);
+
+  const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+  if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+
+  const safeId = promptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(selected[0].id);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  const desc = `Combined ${selected.length} clips: ${combinedComment.slice(0, 60)}`;
+  appendToPromptTracker(project.repo_path, promptId, desc, 'CRAFTED');
+
+  const sentAt = new Date().toISOString();
+  for (const c of selected) {
+    await db.updateClip(c.id, { sent_to_ide_at: sentAt });
+  }
+
+  addAuditEntry('bundle-send', `${selected.length} clips bundled as ${promptId} for IDE at ${project.repo_path}`);
+  notifyMainWindow('clips-changed');
+  notifyMainWindow('clip-sent-to-ide', { clipIds, promptId, projectName: project.name });
+  return { success: true, promptId, path: project.repo_path };
+});
+
+// ── IPC Handlers: Queue as Plan ──
+
+ipcMain.handle('queue-as-plan', async (_, clipIds, projectId) => {
+  if (!Array.isArray(clipIds) || clipIds.length < 2) throw new Error('Need at least 2 clips for a plan');
+  if (!projectId) throw new Error('project_id required');
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const firstClip = await db.getClip(clipIds[0]);
+  const scope = deriveScope(firstClip, project);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const tasks = [];
+
+  // Generate prompt IDs for all tasks
+  const firstPromptId = generatePromptId(scope);
+  const planId = firstPromptId;
+
+  for (let i = 0; i < clipIds.length; i++) {
+    const clip = await db.getClip(clipIds[i]);
+    if (!clip) continue;
+
+    const promptId = i === 0 ? firstPromptId : generatePromptId(scope);
+    const status = i === 0 ? 'BUNDLED' : 'QUEUED';
+    const desc = `[Plan ${i + 1}/${clipIds.length}] ${(clip.comment || '(screenshot)').slice(0, 60)}`;
+
+    appendToPromptTracker(project.repo_path, promptId, desc, 'CRAFTED');
+    if (status === 'QUEUED') {
+      updatePromptStatus(project.repo_path, promptId, 'QUEUED');
+    }
+
+    await db.updateClip(clipIds[i], { sent_to_ide_at: i === 0 ? new Date().toISOString() : null });
+    tasks.push({ clipId: clipIds[i], promptId, status });
+  }
+
+  // Write only the first task's file
+  const bundle = workflowContext.assembleBundle(project.repo_path, firstClip, project);
+  const markdown = formatBundle(firstPromptId, firstClip, bundle, annotationColors);
+
+  const contextDir = path.join(project.repo_path, '.ai-workflow', 'context');
+  if (!fs.existsSync(contextDir)) fs.mkdirSync(contextDir, { recursive: true });
+
+  const safeId = firstPromptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(clipIds[0]);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  activePlans.set(planId, { projectId, repoPath: project.repo_path, tasks, currentIndex: 0 });
+
+  addAuditEntry('queue-plan', `Plan ${planId}: ${tasks.length} tasks queued for ${project.name}`);
+  notifyMainWindow('clips-changed');
+  return { success: true, planId, taskCount: tasks.length };
+});
+
+ipcMain.handle('advance-plan', async (_, planId) => {
+  const plan = activePlans.get(planId);
+  if (!plan) throw new Error('Plan not found');
+
+  const nextIndex = plan.currentIndex + 1;
+  if (nextIndex >= plan.tasks.length) {
+    activePlans.delete(planId);
+    return { success: true, complete: true };
+  }
+
+  const task = plan.tasks[nextIndex];
+  const clip = await db.getClip(task.clipId);
+  const project = await db.getProject(plan.projectId);
+  const annotationColors = await db.getSettings('annotation_colors');
+  const bundle = workflowContext.assembleBundle(plan.repoPath, clip, project);
+  const markdown = formatBundle(task.promptId, clip, bundle, annotationColors);
+
+  const contextDir = path.join(plan.repoPath, '.ai-workflow', 'context');
+  const safeId = task.promptId.replace(/:/g, '-');
+  fs.writeFileSync(path.join(contextDir, `IDE_PROMPT_${safeId}.md`), markdown, 'utf8');
+
+  const dataUrl = images.loadImage(task.clipId);
+  if (dataUrl) {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(path.join(contextDir, `ide-prompt-image-${safeId}.png`), Buffer.from(base64, 'base64'));
+  }
+
+  updatePromptStatus(plan.repoPath, task.promptId, 'BUNDLED');
+  await db.updateClip(task.clipId, { sent_to_ide_at: new Date().toISOString() });
+  plan.currentIndex = nextIndex;
+
+  addAuditEntry('advance-plan', `Plan ${planId}: advanced to task ${nextIndex + 1}/${plan.tasks.length}`);
+  notifyMainWindow('clips-changed');
+  return { success: true, complete: false, currentTask: nextIndex + 1, totalTasks: plan.tasks.length };
+});
+
+ipcMain.handle('cancel-plan', async (_, planId) => {
+  const plan = activePlans.get(planId);
+  if (!plan) throw new Error('Plan not found');
+
+  for (let i = plan.currentIndex + 1; i < plan.tasks.length; i++) {
+    updatePromptStatus(plan.repoPath, plan.tasks[i].promptId, 'FAILED');
+  }
+
+  activePlans.delete(planId);
+  addAuditEntry('cancel-plan', `Plan ${planId}: cancelled`);
+  notifyMainWindow('clips-changed');
+  return { success: true };
+});
+
+ipcMain.handle('get-active-plans', async () => {
+  const plans = [];
+  for (const [planId, plan] of activePlans) {
+    plans.push({
+      planId,
+      projectId: plan.projectId,
+      tasks: plan.tasks.map(t => ({ clipId: t.clipId, promptId: t.promptId, status: t.status })),
+      currentIndex: plan.currentIndex,
+      totalTasks: plan.tasks.length,
+    });
+  }
+  return plans;
+});
+
 // ── IPC Handlers: AI Prompt ──
 
 ipcMain.handle('get-prompt-blocks', () => ai.getPromptBlocks());
@@ -1098,7 +1475,7 @@ ipcMain.handle('get-app-mode', async () => await getAppMode());
 
 ipcMain.handle('toggle-app-mode', async () => {
   const current = await getAppMode();
-  const next = current === 'lite' ? 'full' : 'lite';
+  const next = current === 'focused' ? 'full' : 'focused';
   await db.saveSetting('app_mode', next);
   if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.destroy(); mainWindow = null; }
   if (captureWindow && !captureWindow.isDestroyed()) { captureWindow.destroy(); captureWindow = null; }
@@ -1108,19 +1485,13 @@ ipcMain.handle('toggle-app-mode', async () => {
   return next;
 });
 
-ipcMain.handle('set-lite-active-project', async (_, projectId) => {
-  await db.saveSetting('lite_active_project', projectId);
+ipcMain.handle('set-focused-active-project', async (_, projectId) => {
+  await db.saveSetting('focused_active_project', projectId);
   return true;
 });
 
-ipcMain.handle('toggle-project-ide', async (_, projectId) => {
-  const project = await db.getProject(projectId);
-  if (!project) return null;
-  const newVal = !project.active_in_ide;
-  await db.updateProject(projectId, { active_in_ide: newVal });
-  notifyMainWindow('projects-changed');
-  return newVal;
-});
+// IDE connection state is now auto-detected via MCP heartbeats.
+// Manual toggle removed — active_in_ide is set/cleared by api-server heartbeat system.
 
 // ── IPC Handlers: Workflow ──
 
@@ -1168,7 +1539,9 @@ ipcMain.handle('get-workflow-prompts', async () => {
     if (!raw) return [];
     return raw.split('\n').map((line) => {
       const parts = line.split('|');
-      return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3], type: parts[4] || 'CRAFTED', parentId: parts[5] || null };
+      return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3],
+        type: parts[4] || 'CRAFTED', parentId: parts[5] || null,
+        files: parts[6] ? parts[6].split(',').filter(Boolean) : [] };
     }).reverse();
   } catch { return []; }
 });
@@ -1176,6 +1549,26 @@ ipcMain.handle('get-workflow-prompts', async () => {
 ipcMain.handle('get-workflow-audits', async () => {
   const p = path.join(__dirname, '..', '.ai-workflow', 'context', 'AUDIT_LOG.md');
   try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+});
+
+ipcMain.handle('init-dev-workflow', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const apiPort = parseInt(process.env.HUMINLOOP_API_PORT || '7277', 10);
+  const result = workflowContext.scaffoldWorkflow(project.repo_path, project.name, apiPort);
+
+  if (result.success) {
+    addAuditEntry('workflow-init', `Dev workflow initialized for ${project.name} at ${project.repo_path}`);
+    notifyMainWindow('projects-changed');
+  }
+  return result;
+});
+
+ipcMain.handle('has-project-workflow', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project?.repo_path) return false;
+  return workflowContext.hasWorkflow(project.repo_path);
 });
 
 // ── IPC Handlers: Window Controls ──
@@ -1324,6 +1717,93 @@ ipcMain.handle('setup-finish', async () => {
   await launchMainApp();
 });
 
+// ── IPC Handlers: IDE Setup ──
+
+ipcMain.handle('detect-ide', async (_, repoPath) => {
+  const result = { vsCodeInstalled: false, claudeCodeExtension: false, mcpConfigured: false };
+
+  // Check VS Code CLI
+  try {
+    execSync('code --version', { encoding: 'utf8', timeout: 5000 });
+    result.vsCodeInstalled = true;
+  } catch {}
+
+  // Check Claude Code extension
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  const extDir = path.join(home, '.vscode', 'extensions');
+  try {
+    const dirs = fs.readdirSync(extDir);
+    result.claudeCodeExtension = dirs.some(d => d.startsWith('anthropic.claude-code'));
+  } catch {}
+
+  // Check MCP config
+  if (repoPath) {
+    const mcpPath = path.join(repoPath, '.vscode', 'mcp.json');
+    try {
+      const config = JSON.parse(fs.readFileSync(mcpPath, 'utf8'));
+      result.mcpConfigured = !!(config.servers?.huminloop || config.mcpServers?.huminloop);
+    } catch {}
+  }
+
+  return result;
+});
+
+ipcMain.handle('generate-mcp-config', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const mcpServerPath = path.join(__dirname, '..', 'mcp-server', 'index.js').replace(/\\/g, '/');
+  const apiPort = process.env.HUMINLOOP_API_PORT || '7277';
+
+  return {
+    servers: {
+      huminloop: {
+        command: 'node',
+        args: [mcpServerPath],
+        env: {
+          HUMINLOOP_API_PORT: apiPort,
+          PROJECT_ROOT: project.repo_path.replace(/\\/g, '/'),
+        },
+      },
+    },
+  };
+});
+
+ipcMain.handle('write-mcp-config', async (_, projectId) => {
+  const project = await db.getProject(projectId);
+  if (!project || !project.repo_path) throw new Error('Project has no repo_path');
+
+  const mcpServerPath = path.join(__dirname, '..', 'mcp-server', 'index.js').replace(/\\/g, '/');
+  const apiPort = process.env.HUMINLOOP_API_PORT || '7277';
+  const mcpConfig = {
+    servers: {
+      huminloop: {
+        command: 'node',
+        args: [mcpServerPath],
+        env: {
+          HUMINLOOP_API_PORT: apiPort,
+          PROJECT_ROOT: project.repo_path.replace(/\\/g, '/'),
+        },
+      },
+    },
+  };
+
+  const vscodeDir = path.join(project.repo_path, '.vscode');
+  if (!fs.existsSync(vscodeDir)) fs.mkdirSync(vscodeDir, { recursive: true });
+
+  const mcpPath = path.join(vscodeDir, 'mcp.json');
+  let existing = {};
+  try { existing = JSON.parse(fs.readFileSync(mcpPath, 'utf8')); } catch {}
+
+  // Merge — don't overwrite other servers
+  existing.servers = existing.servers || {};
+  existing.servers.huminloop = mcpConfig.servers.huminloop;
+
+  fs.writeFileSync(mcpPath, JSON.stringify(existing, null, 2), 'utf8');
+  addAuditEntry('ide-setup', `MCP config written for ${project.name} at ${mcpPath}`);
+  return { success: true, path: mcpPath };
+});
+
 // ── Auto-launch on login ──
 
 if (app.isPackaged && process.platform === 'win32') {
@@ -1346,6 +1826,9 @@ async function launchMainApp() {
     return;
   }
   console.log(`[HuminLoop] Database backend: ${db.getBackendName()}`);
+
+  // v2 migration: rename lite → focused
+  await migrateV2();
 
   // One-time migration from electron-store
   await migrateIfNeeded();
@@ -1374,7 +1857,7 @@ async function launchMainApp() {
 
   // Start local HTTP API for MCP server / external tool access
   const { startApiServer } = require('./api-server');
-  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry });
+  startApiServer({ db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry, notifyMainWindow });
 
   // Auto-purge trash items older than 30 days
   db.purgeTrash(30).then((n) => {

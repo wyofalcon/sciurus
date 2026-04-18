@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld('quickclip', {
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   saveSetting: (key, value) => ipcRenderer.invoke('save-setting', key, value),
 
+  // Annotation Colors
+  getAnnotationColors: () => ipcRenderer.invoke('get-annotation-colors'),
+  saveAnnotationColors: (colors) => ipcRenderer.invoke('save-annotation-colors', colors),
+
   // AI
   aiCategorize: (comment, imageData) => ipcRenderer.invoke('ai-categorize', comment, imageData),
   aiSearch: (query) => ipcRenderer.invoke('ai-search', query),
@@ -56,6 +60,12 @@ contextBridge.exposeInMainWorld('quickclip', {
   // Send to IDE
   sendToIde: (clipId) => ipcRenderer.invoke('send-to-ide', clipId),
   combineAndSendToIde: (clipIds, projectId) => ipcRenderer.invoke('combine-and-send-to-ide', clipIds, projectId),
+  bundleAndSend: (clipId, scope) => ipcRenderer.invoke('bundle-and-send', clipId, scope),
+  bundleAndSendMultiple: (clipIds, projectId, scope) => ipcRenderer.invoke('bundle-and-send-multiple', clipIds, projectId, scope),
+  queueAsPlan: (clipIds, projectId) => ipcRenderer.invoke('queue-as-plan', clipIds, projectId),
+  advancePlan: (planId) => ipcRenderer.invoke('advance-plan', planId),
+  cancelPlan: (planId) => ipcRenderer.invoke('cancel-plan', planId),
+  getActivePlans: () => ipcRenderer.invoke('get-active-plans'),
   onClipSentToIde: (cb) => ipcRenderer.on('clip-sent-to-ide', (_, data) => cb(data)),
 
   // Audit ledger
@@ -69,6 +79,8 @@ contextBridge.exposeInMainWorld('quickclip', {
   toggleRelayMode: () => ipcRenderer.invoke('toggle-relay-mode'),
   toggleAuditWatch: () => ipcRenderer.invoke('toggle-audit-watch'),
   getWorkflowAudits: () => ipcRenderer.invoke('get-workflow-audits'),
+  initDevWorkflow: (projectId) => ipcRenderer.invoke('init-dev-workflow', projectId),
+  hasProjectWorkflow: (projectId) => ipcRenderer.invoke('has-project-workflow', projectId),
 
   // App info
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
@@ -105,9 +117,14 @@ contextBridge.exposeInMainWorld('quickclip', {
   // App mode
   toggleAppMode: () => ipcRenderer.invoke('toggle-app-mode'),
   getAppMode: () => ipcRenderer.invoke('get-app-mode'),
-  getLiteClips: () => ipcRenderer.invoke('get-lite-clips'),
-  setLiteActiveProject: (projectId) => ipcRenderer.invoke('set-lite-active-project', projectId),
-  toggleProjectIde: (projectId) => ipcRenderer.invoke('toggle-project-ide', projectId),
+  getFocusedClips: () => ipcRenderer.invoke('get-focused-clips'),
+  setFocusedActiveProject: (projectId) => ipcRenderer.invoke('set-focused-active-project', projectId),
+  // toggleProjectIde removed — IDE connection auto-detected via MCP heartbeats
+
+  // IDE Setup
+  detectIde: (repoPath) => ipcRenderer.invoke('detect-ide', repoPath),
+  generateMcpConfig: (projectId) => ipcRenderer.invoke('generate-mcp-config', projectId),
+  writeMcpConfig: (projectId) => ipcRenderer.invoke('write-mcp-config', projectId),
 
   // Setup wizard
   checkDocker: () => ipcRenderer.invoke('setup-check-docker'),

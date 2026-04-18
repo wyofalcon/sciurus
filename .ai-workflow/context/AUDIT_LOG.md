@@ -1,5 +1,31 @@
 # Pre-Feature Audit Log
 
+## 2026-04-09 — Queue as Plan (Sequential Task Dispatch)
+
+- Plan dispatch reuses existing `formatBundle`, `generatePromptId`, `appendToPromptTracker`, `workflowContext.assembleBundle` — no new duplicated logic
+- New `updatePromptStatus()` helper edits PROMPT_TRACKER.log lines in-place; complements `appendToPromptTracker()` (append vs. update — no overlap)
+- Image write pattern (load → base64 → writeFile) repeated from `bundle-and-send` handler; acceptable since the context differs (plan tasks vs. single bundle)
+- `activePlans` is in-memory only (Map) — lost on app restart. Acceptable for v1; persistence could be added later via DB settings
+- No dead code introduced; all new functions are wired to IPC handlers and renderer calls
+- Recommendation: Consider extracting the IDE_PROMPT file write sequence (markdown + image) into a shared helper in a future pass, since it appears in `bundle-and-send`, `bundle-and-send-multiple`, and now `queue-as-plan` + `advance-plan`
+
+## 2026-04-09 — Lite to Focused Rename + v2 Migration
+
+- Mechanical rename across 10 files — no duplicated logic introduced
+- Dead code identified: `renderer/lite-index.*` (3 files) — orphaned from an earlier abandoned approach where lite mode had its own renderer; current code uses `index.html` with JS-driven tab hiding. Not blocking; left as-is for now.
+- `VALID_SOURCES` in db-sqlite.js and db-pg.js updated to include both `'lite'` (backward compat) and `'focused'` (new)
+- v2 migration added to main.js: runs once on first launch, updates `app_mode`, `focused_active_project`, and clip `source` field
+- `runRaw()` added to DB layer (db.js, db-sqlite.js, db-pg.js) for migration SQL
+- PROMPT_TRACKER.log parser updated to include 7th `files` field in both main.js and api-server.js
+- Recommendation: Clean up dead `renderer/lite-index.*` files in a future pass
+
+## 2026-04-09 — Auto-detect In IDE Connection State
+
+- **Git helper duplication** in mcp-server/index.js — identical `git()` function defined in both `session_context` and `git_status` handlers (lines 339, 447). Extract to module-level utility.
+- **Image load+compress pipeline** repeated 3x in api-server.js (lines 318, 349, 369). Extract to helper.
+- **Dead code**: `deleteCategory()` exists in both DB backends but not exported from db.js wrapper — never called anywhere.
+- **No existing polling/heartbeat infrastructure** — this feature adds the first connection-tracking mechanism. Design it centrally.
+
 ## 2026-04-04 — HuminLoop Lite Mode
 
 - **Workflow file reading duplicated** between main.js IPC handlers and api-server.js (~50 lines). New `workflow-context.js` covers external projects; HuminLoop's own reads should migrate to it over time.

@@ -71,8 +71,14 @@ function error(res, message, status = 400) {
 
 // ── Server ──
 
+// ── IDE Heartbeat Tracking ──
+const ideHeartbeats = new Map(); // projectId → { lastSeen: timestamp, ide: string }
+const HEARTBEAT_TIMEOUT = 60_000; // 60 seconds
+const HEARTBEAT_CHECK_INTERVAL = 15_000;
+
 function startApiServer(deps) {
   const { db, ai, rules, images, sanitizeUpdates, autoCategorize, addAuditEntry } = deps;
+  const { notifyMainWindow } = deps;
 
   const server = http.createServer(async (req, res) => {
     // CORS headers for local dev tools
@@ -270,6 +276,32 @@ function startApiServer(deps) {
         return json(res, { success: true });
       }
 
+      // ── IDE Heartbeat ──
+
+      if (method === 'POST' && (m = matchRoute('/api/projects/:id/heartbeat', pathname))) {
+        const projectId = parseInt(m.params.id, 10);
+        const project = await db.getProject(projectId);
+        if (!project) return error(res, 'Project not found', 404);
+        const body = await parseBody(req);
+        const ide = body.ide || 'unknown';
+        ideHeartbeats.set(projectId, { lastSeen: Date.now(), ide });
+        // If project wasn't active, flip it on
+        if (!project.active_in_ide) {
+          await db.updateProject(projectId, { active_in_ide: true, ide });
+          if (notifyMainWindow) notifyMainWindow('projects-changed');
+        }
+        return json(res, { ok: true, active_in_ide: true });
+      }
+
+      if (method === 'GET' && pathname === '/api/ide/connections') {
+        const connections = [];
+        for (const [pid, info] of ideHeartbeats) {
+          const age = Date.now() - info.lastSeen;
+          if (age < HEARTBEAT_TIMEOUT) connections.push({ project_id: pid, ide: info.ide, age_ms: age });
+        }
+        return json(res, connections);
+      }
+
       // ── Categories ──
 
       if (method === 'GET' && pathname === '/api/categories') {
@@ -412,7 +444,9 @@ function startApiServer(deps) {
           if (!raw) return json(res, []);
           const prompts = raw.split('\n').map((line) => {
             const parts = line.split('|');
-            return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3], type: parts[4] || 'CRAFTED', parentId: parts[5] || null };
+            return { id: parts[0], status: parts[1], timestamp: parts[2], description: parts[3],
+              type: parts[4] || 'CRAFTED', parentId: parts[5] || null,
+              files: parts[6] ? parts[6].split(',').filter(Boolean) : [] };
           }).reverse();
           return json(res, prompts);
         } catch { return json(res, []); }
@@ -423,6 +457,51 @@ function startApiServer(deps) {
         try { return json(res, { content: fs.readFileSync(p, 'utf8') }); } catch { return json(res, { content: null }); }
       }
 
+      // PATCH /api/workflow/prompts/:id — update prompt status
+      if (method === 'PATCH' && (m = matchRoute('/api/workflow/prompts/:id', pathname))) {
+        const body = await parseBody(req);
+        const newStatus = body.status;
+        if (!newStatus) return error(res, 'status required');
+
+        const validStatuses = ['CRAFTED', 'BUNDLED', 'SENT', 'BUILDING', 'DONE', 'FAILED', 'QUEUED'];
+        if (!validStatuses.includes(newStatus)) return error(res, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+
+        const promptId = decodeURIComponent(m.params.id);
+
+        // Find the project with this prompt — scan all projects for PROMPT_TRACKER.log
+        const projects = await db.getProjects();
+        let updated = false;
+        for (const p of projects) {
+          if (!p.repo_path) continue;
+          const trackerPath = path.join(p.repo_path, '.ai-workflow', 'context', 'PROMPT_TRACKER.log');
+          try {
+            const raw = fs.readFileSync(trackerPath, 'utf8');
+            if (!raw.includes(promptId)) continue;
+
+            const lines = raw.split('\n');
+            const newLines = lines.map(line => {
+              if (line.startsWith(promptId + '|')) {
+                const parts = line.split('|');
+                parts[1] = newStatus;
+                // Append affected files if provided (7th field)
+                if (body.files) {
+                  while (parts.length < 7) parts.push('');
+                  parts[6] = typeof body.files === 'string' ? body.files : body.files.join(',');
+                }
+                return parts.join('|');
+              }
+              return line;
+            });
+            fs.writeFileSync(trackerPath, newLines.join('\n'), 'utf8');
+            updated = true;
+            break;
+          } catch {}
+        }
+
+        if (!updated) return error(res, 'Prompt not found in any project tracker', 404);
+        return json(res, { success: true, id: promptId, status: newStatus });
+      }
+
       // ── 404 ──
       error(res, `Not found: ${method} ${pathname}`, 404);
 
@@ -431,6 +510,42 @@ function startApiServer(deps) {
       error(res, e.message, 500);
     }
   });
+
+  // Expire stale IDE heartbeats
+  setInterval(async () => {
+    const now = Date.now();
+    for (const [pid, info] of ideHeartbeats) {
+      if (now - info.lastSeen >= HEARTBEAT_TIMEOUT) {
+        ideHeartbeats.delete(pid);
+        try {
+          const project = await db.getProject(pid);
+          if (project && project.active_in_ide) {
+            await db.updateProject(pid, { active_in_ide: false, ide: null });
+            if (notifyMainWindow) notifyMainWindow('projects-changed');
+            console.log(`[HuminLoop API] IDE heartbeat expired for project ${pid}`);
+          }
+        } catch (e) {
+          console.error(`[HuminLoop API] Heartbeat expiry error for project ${pid}:`, e.message);
+        }
+      }
+    }
+  }, HEARTBEAT_CHECK_INTERVAL);
+
+  // On startup, clear any stale active_in_ide flags left from before heartbeat system
+  (async () => {
+    try {
+      const projects = await db.getProjects();
+      for (const p of projects) {
+        if (p.active_in_ide && !ideHeartbeats.has(p.id)) {
+          await db.updateProject(p.id, { active_in_ide: false, ide: null });
+          console.log(`[HuminLoop API] Cleared stale IDE flag for project ${p.id} (${p.name})`);
+        }
+      }
+      if (notifyMainWindow) notifyMainWindow('projects-changed');
+    } catch (e) {
+      console.error('[HuminLoop API] Stale IDE cleanup error:', e.message);
+    }
+  })();
 
   server.listen(PORT, '127.0.0.1', () => {
     console.log(`[HuminLoop API] Listening on http://127.0.0.1:${PORT}`);

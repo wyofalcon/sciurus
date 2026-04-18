@@ -1,0 +1,35 @@
+#!/bin/bash
+# --- HuminLoop Dev Workflow: Prompt ID Tracking ---
+# Scans commit message for "# Prompt ID: xxx" and updates status to DONE
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"
+
+# Skip merge, squash, amend
+if [[ "$COMMIT_SOURCE" == "merge" || "$COMMIT_SOURCE" == "squash" || "$COMMIT_SOURCE" == "commit" ]]; then
+    exit 0
+fi
+
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+
+# Skip on detached HEAD
+[ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = "HEAD" ] && exit 0
+
+# Extract Prompt ID from commit message
+PROMPT_ID=$(grep -oP '(?<=^# Prompt ID: ).+' "$COMMIT_MSG_FILE" | head -1)
+
+if [ -n "$PROMPT_ID" ]; then
+    API_PORT=7277
+    PORT_FILE="$PROJECT_ROOT/.ai-workflow/config/api-port"
+    [ -f "$PORT_FILE" ] && API_PORT=$(cat "$PORT_FILE")
+
+    CHANGED_FILES=$(git diff --cached --name-only | tr '\n' ',' | sed 's/,$//')
+
+    curl -s -X PATCH \
+        "http://127.0.0.1:${API_PORT}/api/workflow/prompts/${PROMPT_ID}" \
+        -H "Content-Type: application/json" \
+        -d "{\"status\":\"DONE\",\"files\":\"${CHANGED_FILES}\"}" \
+        --connect-timeout 2 \
+        --max-time 5 \
+        > /dev/null 2>&1 &
+fi

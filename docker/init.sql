@@ -64,7 +64,7 @@ CREATE TABLE clips (
     sent_to_ide_at TIMESTAMPTZ DEFAULT NULL,
     deleted_at  TIMESTAMPTZ DEFAULT NULL,
     timestamp   BIGINT NOT NULL,
-    source      VARCHAR(10) NOT NULL DEFAULT 'full' CHECK (source IN ('full', 'lite')),
+    source      VARCHAR(10) NOT NULL DEFAULT 'full' CHECK (source IN ('full', 'focused')),
     window_title  TEXT DEFAULT NULL,
     process_name  VARCHAR(255) DEFAULT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),

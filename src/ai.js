@@ -115,17 +115,28 @@ JSON schema:
   "url": "string — extracted URL if visible, otherwise empty string"
 }`;
 
-const LITE_PROMPT = `You are analyzing a screenshot with colored annotations from a developer.
+const DEFAULT_ANNOTATION_COLORS = [
+  { id: 'red', hex: '#FF0000', label: 'Remove, delete, or fix what is marked', shortLabel: 'remove' },
+  { id: 'green', hex: '#00FF00', label: 'Add or create something at this location', shortLabel: 'add' },
+  { id: 'pink', hex: '#FF69B4', label: 'Reference point — identifying or pointing out this element for context', shortLabel: 'reference' },
+];
+
+function buildFocusedPrompt(annotationColors) {
+  const colors = annotationColors && annotationColors.length > 0 ? annotationColors : DEFAULT_ANNOTATION_COLORS;
+  const colorLines = colors.map(c =>
+    `- ${c.id.toUpperCase()} markings (${c.hex}): ${c.label}`
+  ).join('\n');
+
+  return `You are analyzing a screenshot with colored annotations from a developer.
 The annotations follow this color coding:
-- RED markings (circles, crosses, text): Remove, delete, or fix what is marked
-- GREEN markings (circles, highlights, text): Add or create something at this location
-- PINK/PURPLE markings (circles, highlights, text): Reference point — the user is identifying or pointing out this element for context. It may or may not need changes.
+${colorLines}
 
 PRIORITY: The developer's written note is the primary source of intent. If the note clarifies, overrides, or adds nuance to what the color annotations suggest, follow the note. Annotations are also expressions of intent and should be treated as instructions — but when the note and annotations conflict, the note wins.
 
 Use the project context and session information to generate a more specific and relevant prompt. Reference the current branch, recent work, and known issues where they relate to what the annotations and note describe.
 
-Generate a single, specific, actionable prompt that a coding AI could execute directly. Be concrete about what to change based on the annotations and note. Reference pink-marked elements as context when relevant. Output only the prompt text, no explanation or formatting.`;
+Generate a single, specific, actionable prompt that a coding AI could execute directly. Be concrete about what to change based on the annotations and note. Reference marked elements as context when relevant. Output only the prompt text, no explanation or formatting.`;
+}
 
 // State: which blocks are enabled (loaded from DB, defaults to all on)
 let enabledBlocks = null; // { category: true, project: true, ... }
@@ -280,7 +291,7 @@ async function categorize(comment, categories, imageDataURL = null, projects = n
   }
 }
 
-async function generateLitePrompt(comment, imageDataURL, windowMeta = {}, project = {}, workflowContext = {}) {
+async function generateFocusedPrompt(comment, imageDataURL, windowMeta = {}, project = {}, workflowContext = {}, annotationColors = null) {
   if (!isEnabled()) return null;
 
   const parts = [];
@@ -304,11 +315,11 @@ async function generateLitePrompt(comment, imageDataURL, windowMeta = {}, projec
   messageParts.push({ text: userText });
 
   try {
-    const result = await callGemini(LITE_PROMPT, messageParts, { raw: true });
+    const result = await callGemini(buildFocusedPrompt(annotationColors), messageParts, { raw: true });
     if (!result) return null;
     return result.replace(/^["'`]+|["'`]+$/g, '').trim();
   } catch (e) {
-    console.error('[HuminLoop AI] Lite prompt generation failed:', e.message);
+    console.error('[HuminLoop AI] Focused prompt generation failed:', e.message);
     return null;
   }
 }
@@ -529,6 +540,7 @@ async function generateCombinedPrompt(notes) {
 }
 
 module.exports = {
-  init, isEnabled, categorize, generateLitePrompt, search, summarizeNotes, generateCombinedPrompt,
+  init, isEnabled, categorize, generateFocusedPrompt, search, summarizeNotes, generateCombinedPrompt,
   getCategorizePrompt, getPromptBlocks, setPromptBlocks, resetPromptBlocks, estimateTokens,
+  DEFAULT_ANNOTATION_COLORS,
 };
